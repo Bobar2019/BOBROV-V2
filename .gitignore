@@ -1,0 +1,20 @@
+# Environnement virtuel
+.venv/
+
+# Configuration locale (générée au premier lancement, spécifique à l'installation)
+config.json
+config.json.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Données locales (médiathèque vidéo)
+videos/*.mp4
+videos/*.mjpg
+videos/index.json
+
+# Divers
+*.bak
+*.log

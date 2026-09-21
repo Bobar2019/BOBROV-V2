@@ -1,0 +1,6 @@
+# BOBROV — dépendances du cockpit (Raspberry Pi 5)
+# Étape 1 : socle web + série. Les briques suivantes s'ajouteront ici.
+fastapi>=0.115
+uvicorn[standard]>=0.30
+pyserial>=3.5
+pytest>=8.0

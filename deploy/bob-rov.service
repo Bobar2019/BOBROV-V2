@@ -1,0 +1,19 @@
+# BOBROV — unité systemd (source de vérité, versionnée avec le projet).
+# Installation : sudo install -m 0644 deploy/bob-rov.service /etc/systemd/system/bob-rov.service
+# puis : sudo systemctl daemon-reload && sudo systemctl enable --now bob-rov.service
+
+[Unit]
+Description=BOBROV-V2 — cockpit de contrôle ROV (FastAPI, port 8080)
+After=network.target
+
+[Service]
+Type=simple
+User=bob
+Group=bob
+WorkingDirectory=/home/bob/BOBROV-V2
+ExecStart=/home/bob/BOBROV-V2/run.sh
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
