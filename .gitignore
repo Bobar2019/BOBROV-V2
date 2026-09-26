@@ -4,6 +4,7 @@
 # Configuration locale (générée au premier lancement, spécifique à l'installation)
 config.json
 config.json.tmp
+config.json.bak
 
 # Python
 __pycache__/
@@ -13,8 +14,18 @@ __pycache__/
 # Données locales (médiathèque vidéo)
 videos/*.mp4
 videos/*.mjpg
+videos/*.webm
+videos/*.jpg
+videos/*.jpeg
 videos/index.json
+videos/.bobrov_index.json
+
+# Journaux locaux : le répertoire est conservé pour les déploiements.
+logs/*
+!logs/.gitkeep
 
 # Divers
 *.bak
 *.log
+/.tmp_*
+.DS_Store

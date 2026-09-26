@@ -1,67 +1,932 @@
 <!DOCTYPE html>
 <html lang="fr">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<meta name="theme-color" content="#131417">
-<title>BOBROV — Socle en place (étape 1)</title>
-<!--
-  Page de contrôle provisoire de l'étape 1 : elle prouve que la chaîne
-  complète fonctionne (FastAPI + statique + config centralisée).
-  Elle sera remplacée par le shell SPA complet (dashboard par tuiles,
-  thèmes, WebSocket) à l'étape 7.
--->
-<style>
-  :root {
-    --bg: #131417; --card: #1e1f26; --border: #3d4150;
-    --text: #e8eaf0; --dim: #aaaebc; --cyan: #00d9ff; --green: #00e676; --red: #ff3b30;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body {
-    background: var(--bg); color: var(--text);
-    font-family: 'Source Code Pro', ui-monospace, 'DejaVu Sans Mono', monospace;
-    min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    padding: 24px;
-  }
-  main { width: 100%; max-width: 540px; text-align: center; }
-  h1 { font-size: 2rem; letter-spacing: 6px; color: var(--cyan); margin-bottom: 10px; }
-  .sub { color: var(--dim); font-size: 0.82rem; margin-bottom: 28px; line-height: 1.6; }
-  .card {
-    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
-    padding: 20px 22px; text-align: left; font-size: 0.85rem; line-height: 2;
-  }
-  .ok { color: var(--green); }
-  .err { color: var(--red); }
-  code {
-    color: var(--cyan); background: rgba(0, 217, 255, 0.08);
-    padding: 1px 6px; border-radius: 5px; font-family: inherit; font-size: 0.82rem;
-  }
-</style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <meta name="theme-color" content="#131417">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="BOBROV">
+    <title>BOBROV — Cockpit</title>
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23131417'/><text y='72' x='50' font-family='Arial' font-size='40' font-weight='bold' fill='%2300d9ff' text-anchor='middle'>BR</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Michroma&family=Source+Code+Pro:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <script>
+        /* Thème sombre par défaut ; préférence mémorisée appliquée AVANT le
+           premier rendu pour éviter tout flash de thème au chargement. */
+        (function () {
+            var t = 'dark';
+            try { t = localStorage.getItem('bobrov_theme') || 'dark'; } catch (_) {}
+            document.documentElement.setAttribute('data-theme', t === 'light' ? 'light' : 'dark');
+        })();
+    </script>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="sim/sim.css">
 </head>
 <body>
-<main>
-  <h1>BOBROV</h1>
-  <p class="sub">Cockpit de contrôle ROV — socle étape 1<br>
-     (SPA complète par tuiles à l'étape 7)</p>
-  <div class="card">
-    <div id="status">Interrogation de <code>/api/system/status</code>…</div>
-  </div>
-</main>
-<script>
-  var el = document.getElementById('status');
-  fetch('/api/system/status')
-    .then(function (r) { if (!r.ok) throw new Error(r.status); return r.json(); })
-    .then(function (d) {
-      el.innerHTML =
-        '<span class="ok">&#9679; Socle opérationnel</span><br>' +
-        'Version : <code>' + d.version + '</code> — config v' + d.config_version + '<br>' +
-        'Uptime : ' + d.uptime_s + ' s<br>' +
-        'Liaison série prévue : <code>' + d.serial.port + '</code> @ ' + d.serial.baud + ' bauds' +
-        ' <span style="color:var(--dim)">(service série : étape 3)</span>';
-    })
-    .catch(function () {
-      el.innerHTML = '<span class="err">&#9679; API injoignable</span>';
-    });
-</script>
+
+    <!-- ===== TOPBAR : logo + badges live + bascule de thème ===== -->
+    <header id="topbar">
+        <div class="logo">BOBROV</div>
+        <div class="topbar-right">
+            <div class="status-badges">
+                <span id="badge-serial" class="badge badge-off" title="Liaison série ESP32-S3">SÉRIE ✕</span>
+                <span id="badge-video" class="badge badge-off" title="Flux caméras">VIDÉO 0/2</span>
+                <span id="badge-ws" class="badge badge-off" title="Télémétrie temps réel (étape 4)">TÉLÉMÉTRIE — ÉTAPE 4</span>
+            </div>
+            <button id="btn-theme" class="theme-toggle" type="button"
+                    aria-label="Basculer clair / sombre" title="Basculer clair / sombre">
+                <svg class="icon-sun" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
+                <svg class="icon-moon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+            </button>
+        </div>
+    </header>
+
+    <!-- ===== ACCUEIL : 4 tuiles réorganisables ===== -->
+    <main id="dashboard" class="index-container">
+        <header class="index-header">
+            <h1>POSTE DE PILOTAGE</h1>
+            <p>Sélectionnez une fonction pour commencer</p>
+        </header>
+
+        <div class="dash-edit-bar">
+            <button id="btnEditDash" class="dash-edit-btn" type="button"><span>Réorganiser</span></button>
+            <button id="btnSaveDash" class="dash-edit-btn dash-edit-save" type="button" style="display:none"><span>Terminer</span></button>
+            <div id="dash-edit-hint" class="dash-edit-hint" style="display:none">
+                Appui long ou glisser pour déplacer une tuile
+            </div>
+        </div>
+
+        <nav class="nav-grid" id="nav-grid">
+            <a class="nav-tile" data-tile-id="cockpit" data-target="section-cockpit" href="#section-cockpit">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><polygon points="23 7 16 12 23 17 23 7"></polygon><rect x="1" y="5" width="15" height="14" rx="2" ry="2"></rect></svg>
+                <span>Cockpit</span>
+            </a>
+            <a class="nav-tile" data-tile-id="videos" data-target="section-videos" href="#section-videos">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><rect x="2" y="2" width="20" height="20" rx="2.18" ry="2.18"></rect><line x1="7" y1="2" x2="7" y2="22"></line><line x1="17" y1="2" x2="17" y2="22"></line><line x1="2" y1="12" x2="22" y2="12"></line><line x1="2" y1="7" x2="7" y2="7"></line><line x1="2" y1="17" x2="7" y2="17"></line><line x1="17" y1="17" x2="22" y2="17"></line><line x1="17" y1="7" x2="22" y2="7"></line></svg>
+                <span>Mes Vidéos</span>
+            </a>
+            <a class="nav-tile" data-tile-id="parameters" data-target="parameters" href="#parameters">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>
+                <span>Paramètres</span>
+            </a>
+            <a class="nav-tile" data-tile-id="simulator" data-target="section-simulator" href="#section-simulator">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"></path></svg>
+                <span>Sub Simulator</span>
+            </a>
+        </nav>
+    </main>
+
+    <!-- ===== PARAMÈTRES : sous-menu en tuiles réorganisables ===== -->
+    <main id="parameters" class="index-container" style="display:none">
+        <header class="index-header">
+            <h1>PARAMÈTRES</h1>
+            <p>Chaque section possède son bouton Enregistrer</p>
+        </header>
+
+        <div class="dash-edit-bar">
+            <button id="btnEditParams" class="dash-edit-btn" type="button"><span>Réorganiser</span></button>
+            <button id="btnSaveParams" class="dash-edit-btn dash-edit-save" type="button" style="display:none"><span>Terminer</span></button>
+            <div id="params-edit-hint" class="dash-edit-hint" style="display:none">
+                Appui long ou glisser pour déplacer une tuile
+            </div>
+        </div>
+
+        <nav class="nav-grid" id="params-grid">
+            <a class="nav-tile" data-tile-id="cameras" data-target="section-cameras" href="#section-cameras">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+                <span>Caméras</span>
+            </a>
+            <a class="nav-tile" data-tile-id="network" data-target="section-network" href="#section-network">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                <span>Réseau</span>
+            </a>
+            <a class="nav-tile" data-tile-id="config" data-target="section-config" href="#section-config">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="4" y1="21" x2="4" y2="14"></line><line x1="4" y1="10" x2="4" y2="3"></line><line x1="12" y1="21" x2="12" y2="12"></line><line x1="12" y1="8" x2="12" y2="3"></line><line x1="20" y1="21" x2="20" y2="16"></line><line x1="20" y1="12" x2="20" y2="3"></line><line x1="1" y1="14" x2="7" y2="14"></line><line x1="9" y1="8" x2="15" y2="8"></line><line x1="17" y1="16" x2="23" y2="16"></line></svg>
+                <span>Config Cockpit</span>
+            </a>
+            <a class="nav-tile" data-tile-id="manette" data-target="section-manette" href="#section-manette">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="8.5" r="5.5"></circle><circle cx="12" cy="8.5" r="1.8"></circle><line x1="12" y1="14" x2="12" y2="17"></line><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+                <span>Manette</span>
+            </a>
+            <a class="nav-tile" data-tile-id="system" data-target="section-system" href="#section-system">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="2" ry="2"></rect><rect x="9" y="9" width="6" height="6"></rect><line x1="9" y1="1" x2="9" y2="4"></line><line x1="15" y1="1" x2="15" y2="4"></line><line x1="9" y1="20" x2="9" y2="23"></line><line x1="15" y1="20" x2="15" y2="23"></line><line x1="20" y1="9" x2="23" y2="9"></line><line x1="20" y1="14" x2="23" y2="14"></line><line x1="1" y1="9" x2="4" y2="9"></line><line x1="1" y1="14" x2="4" y2="14"></line></svg>
+                <span>Système</span>
+            </a>
+            <a class="nav-tile" data-tile-id="sim-config" data-target="section-sim-config" href="#section-sim-config">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M12 2.69l5.66 5.66a8 8 0 1 1-11.31 0z"></path></svg>
+                <span>Sub Simu</span>
+            </a>
+            <a class="nav-tile" data-tile-id="glasses" data-target="section-glasses" href="#section-glasses">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6.5" cy="14" r="3.5"></circle><circle cx="17.5" cy="14" r="3.5"></circle><path d="M10 13.6c.7-.9 3.3-.9 4 0"></path><path d="M3.2 12.4 5 6.5h3.6M20.8 12.4 19 6.5h-3.6"></path></svg>
+                <span>Lunettes AR</span>
+            </a>
+        </nav>
+    </main>
+
+    <!-- ===== SECTION COCKPIT ===== -->
+    <section id="section-cockpit" class="section-panel page-container" style="display:none">
+        <h2>Cockpit</h2>
+        <p class="page-sub">Vue de pilotage : flux vidéo en direct, enregistrement et photos, avec télémétrie
+        incrustée façon HUD (données simulées en l'absence de liaison). « Mise en page » règle positions,
+        tailles, transparence, couleur, finesse des traits et taille des textes des instruments.</p>
+
+        <!-- Vue vidéo unifiée : le plein écran porte sur ce conteneur (et non la
+             seule scène) pour que la barre de commandes et celle de mise en page
+             HUD restent accessibles par-dessus la vidéo. -->
+        <div class="video-view" id="video-view">
+        <div class="video-toolbar card" id="video-toolbar">
+            <div class="segmented" id="video-mode" role="group" aria-label="Disposition">
+                <button type="button" data-mode="solo" class="seg-btn">Solo</button>
+                <button type="button" data-mode="duo" class="seg-btn">Côte à côte</button>
+                <button type="button" data-mode="pip" class="seg-btn active">PIP</button>
+            </div>
+            <div class="segmented" id="video-source" role="group" aria-label="Source principale">
+                <button type="button" data-src="cam1" class="seg-btn active">Source : Cam 1</button>
+                <button type="button" data-src="cam2" class="seg-btn">Source : Cam 2</button>
+            </div>
+            <button id="btn-video-swap" class="btn btn-ghost" type="button" title="Échanger la caméra principale et l'incrustation PIP : celle en principal passe en PIP et inversement">Permuter</button>
+            <div class="toolbar-btns">
+                <button id="btn-video-rec" class="btn btn-rec" type="button" title="Enregistrer la vidéo du flux affiché (fichier .webm dans Mes Vidéos)">
+                    <span class="rec-dot" aria-hidden="true"></span><span id="btn-video-rec-label">REC</span>
+                </button>
+                <button id="btn-video-recview" class="btn btn-rec" type="button" title="Enregistrer la caméra principale avec le HUD télémétrie, sans PIP (fichier .webm dans Mes Vidéos)">
+                    <span class="rec-dot" aria-hidden="true"></span><span id="btn-video-recview-label">REC vue</span>
+                </button>
+                <button id="btn-video-shot" class="btn btn-ghost" type="button" title="Photo du flux affiché → Mes Vidéos">Photo</button>
+                <span id="rec-status" class="rec-status" hidden>ENR 00:00</span>
+                <button id="btn-video-reload" class="btn btn-primary" type="button">Reconnecter</button>
+                <button id="btn-video-detach" class="btn btn-ghost" type="button">Déconnecter</button>
+                <button id="btn-video-full" class="btn btn-ghost" type="button">Plein écran</button>
+                <button id="btn-hud-edit" class="btn btn-ghost" type="button" title="Déplacer les instruments à la souris : glisser = position, poignée = taille, molette = transparence">Mise en page</button>
+            </div>
+            <button id="btn-toolbar-toggle" class="toolbar-toggle" type="button" aria-expanded="true"
+                    title="Replier la barre de commandes (la flèche la rouvre)">
+                <svg class="icon-caret" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+            </button>
+        </div>
+
+        <!-- Barre de réglage de mise en page HUD (visible en mode « Mise en page » seulement).
+             Placée hors de la scène vidéo : elle ne recouvre jamais les instruments. -->
+        <div id="hud-toolbar" class="hud-toolbar" hidden>
+            <span class="hud-toolbar-hint" id="hud-toolbar-hint">Clic = sélectionner · Glisser = déplacer · Poignée = taille · Molette = transparence</span>
+            <label class="hud-ctl">Élément
+                <select id="hud-el-select"></select>
+            </label>
+            <label class="hud-ctl">Couleur
+                <input type="color" id="hud-el-color" value="#00d9ff" title="Couleur du tracé de l'élément sélectionné">
+            </label>
+            <label class="hud-ctl">Finesse
+                <input type="range" id="hud-el-weight" min="0.5" max="2.5" step="0.1" value="1"
+                    title="Épaisseur des traits de l'élément sélectionné">
+                <output id="hud-el-weight-val">×1,0</output>
+            </label>
+            <label class="hud-ctl">Texte
+                <input type="range" id="hud-el-font" min="0.5" max="2.5" step="0.1" value="1"
+                    title="Taille des textes de l'élément sélectionné">
+                <output id="hud-el-font-val">×1,0</output>
+            </label>
+            <label class="hud-ctl" id="hud-ctl-max" hidden>Prof. max (m)
+                <input type="number" id="hud-el-max" min="5" max="500" step="1" value="100"
+                    title="Profondeur max de la jauge de profondeur : échelle du cadran, virage au rouge et clignotement à 2 m de cette limite">
+            </label>
+            <button id="btn-hud-save" class="btn btn-success" type="button">Enregistrer</button>
+            <button id="btn-hud-reset" class="btn btn-ghost" type="button">Réinitialiser</button>
+            <button id="btn-hud-cancel" class="btn btn-ghost" type="button">Annuler</button>
+        </div>
+
+        <div id="video-stage" class="video-stage mode-pip pip-on pip-bottom-right">
+            <div class="video-pane pane-main" id="pane-cam1">
+                <span class="feed-tag">CAM 1</span>
+                <img id="feed-cam1" class="feed-img" alt="Flux caméra 1">
+                <div class="feed-overlay" id="overlay-cam1" hidden>
+                    <div class="feed-overlay-inner">
+                        <div class="feed-spinner"></div>
+                        <p class="feed-title">PAS DE SIGNAL</p>
+                        <p class="feed-detail" id="detail-cam1">Caméra 1 — en attente du flux…</p>
+                    </div>
+                </div>
+            </div>
+            <div class="video-pane pane-pip" id="pane-cam2">
+                <span class="feed-tag">CAM 2</span>
+                <img id="feed-cam2" class="feed-img" alt="Flux caméra 2">
+                <div class="feed-overlay" id="overlay-cam2" hidden>
+                    <div class="feed-overlay-inner">
+                        <div class="feed-spinner"></div>
+                        <p class="feed-title">PAS DE SIGNAL</p>
+                        <p class="feed-detail" id="detail-cam2">Caméra 2 — en attente du flux…</p>
+                    </div>
+                </div>
+            </div>
+
+            <!-- HUD télémétrie : instruments canvas incrustés sur la vidéo (% de la scène).
+                 Positions/nombres par défaut = secours statique ; app.js les relit depuis config.json. -->
+            <div id="hud-layer" class="hud-layer" aria-label="Instruments de télémétrie">
+                <div class="hud-el" data-hud="horizon" style="left:37%;top:12%;width:26%;height:40%;--hud-o:0.92">
+                    <canvas class="hud-canvas"></canvas>
+                    <span class="hud-el-name">Horizon artificiel</span>
+                    <span class="hud-el-badge">92 %</span>
+                    <span class="hud-handle" title="Glisser pour redimensionner"></span>
+                </div>
+                <div class="hud-el" data-hud="heading" style="left:34%;top:3%;width:32%;height:8%;--hud-o:0.92">
+                    <canvas class="hud-canvas"></canvas>
+                    <span class="hud-el-name">Cap</span>
+                    <span class="hud-el-badge">92 %</span>
+                    <span class="hud-handle" title="Glisser pour redimensionner"></span>
+                </div>
+                <div class="hud-el" data-hud="depth" style="left:82%;top:8%;width:15%;height:56%;--hud-o:0.92">
+                    <canvas class="hud-canvas"></canvas>
+                    <span class="hud-el-name">Profondeur</span>
+                    <span class="hud-el-badge">92 %</span>
+                    <span class="hud-handle" title="Glisser pour redimensionner"></span>
+                </div>
+                <div class="hud-el" data-hud="temperature" style="left:82%;top:64.5%;width:15%;height:5.2%;--hud-o:0.92">
+                    <canvas class="hud-canvas"></canvas>
+                    <span class="hud-el-name">Température</span>
+                    <span class="hud-el-badge">92 %</span>
+                    <span class="hud-handle" title="Glisser pour redimensionner"></span>
+                </div>
+                <div class="hud-el" data-hud="gauges" style="left:0.5%;top:56%;width:26%;height:25%;--hud-o:0.92">
+                    <canvas class="hud-canvas"></canvas>
+                    <span class="hud-el-name">Moteurs M1–M8</span>
+                    <span class="hud-el-badge">92 %</span>
+                    <span class="hud-handle" title="Glisser pour redimensionner"></span>
+                </div>
+                <div class="hud-el" data-hud="grip" style="left:27%;top:56%;width:12.5%;height:8.5%;--hud-o:0.92">
+                    <canvas class="hud-canvas"></canvas>
+                    <span class="hud-el-name">Pince &amp; rotation</span>
+                    <span class="hud-el-badge">92 %</span>
+                    <span class="hud-handle" title="Glisser pour redimensionner"></span>
+                </div>
+                <div class="hud-el" data-hud="aux" style="left:27%;top:65.5%;width:12.5%;height:27%;--hud-o:0.92">
+                    <canvas class="hud-canvas"></canvas>
+                    <span class="hud-el-name">Voies 11–16</span>
+                    <span class="hud-el-badge">92 %</span>
+                    <span class="hud-handle" title="Glisser pour redimensionner"></span>
+                </div>
+                <div class="hud-el" data-hud="voltage" style="left:0.5%;top:81.5%;width:13.8%;height:5.2%;--hud-o:0.92">
+                    <canvas class="hud-canvas"></canvas>
+                    <span class="hud-el-name">Voltage</span>
+                    <span class="hud-el-badge">92 %</span>
+                    <span class="hud-handle" title="Glisser pour redimensionner"></span>
+                </div>
+                <div class="hud-el" data-hud="motor_v" style="left:0.5%;top:87.3%;width:13.8%;height:5.2%;--hud-o:0.92">
+                    <canvas class="hud-canvas"></canvas>
+                    <span class="hud-el-name">Moteur vertical</span>
+                    <span class="hud-el-badge">92 %</span>
+                    <span class="hud-handle" title="Glisser pour redimensionner"></span>
+                </div>
+                <div class="hud-el" data-hud="motor_h" style="left:0.5%;top:93.1%;width:13.8%;height:5.2%;--hud-o:0.92">
+                    <canvas class="hud-canvas"></canvas>
+                    <span class="hud-el-name">Moteur horizontal</span>
+                    <span class="hud-el-badge">92 %</span>
+                    <span class="hud-handle" title="Glisser pour redimensionner"></span>
+                </div>
+                <!-- Indication d'enregistrement, intégrée au HUD (hors « Mise en page »).
+                     Affichée seulement pendant un REC : « REC VIDEO HUD » + temps pour
+                     la capture caméra + HUD, « REC VIDEO » + temps pour le flux brut. -->
+                <div id="rec-hud-badge" class="rec-hud-badge" hidden>
+                    <span class="rec-hud-dot" aria-hidden="true"></span>
+                    <span id="rec-hud-text">REC VIDEO 00:00</span>
+                </div>
+            </div>
+
+        </div>
+        </div><!-- /video-view -->
+
+        <div class="video-info-bar">
+            <span class="info-chip" id="vinfo-cam1">Cam 1 : —</span>
+            <span class="info-chip" id="vinfo-cam2">Cam 2 : —</span>
+            <span class="info-chip" id="vinfo-mode">Mode : PIP</span>
+            <span class="info-chip" id="vinfo-telemetry">Télémétrie : —</span>
+        </div>
+
+        <p class="hint">Disposition, incrustation PIP et HUD : réglages persistants dans « Config Cockpit ».
+        Les boutons ci-dessus ne changent que la vue en cours ; « Mise en page » permet de repositionner
+        les instruments à la souris, de choisir la couleur du tracé, la finesse des traits et la taille
+        des textes de chaque élément, puis de tout enregistrer dans config.json.</p>
+    </section>
+
+    <!-- ===== SECTION MES VIDÉOS ===== -->
+    <section id="section-videos" class="section-panel page-container" style="display:none">
+        <h2>Mes Vidéos</h2>
+        <p class="page-sub">Vidéos et photos enregistrées — liste avec vignettes, notes et étoiles,
+        téléchargement / suppression par sélection.</p>
+
+        <div class="video-toolbar card">
+            <input type="search" id="videos-search" class="input-search" placeholder="Rechercher un média…">
+            <label class="inline-label">Tri
+                <select id="videos-sort">
+                    <option value="recent">Plus récents</option>
+                    <option value="old">Plus anciens</option>
+                    <option value="name">Nom (A→Z)</option>
+                    <option value="stars">Étoiles</option>
+                </select>
+            </label>
+            <label class="inline-label">Étoiles
+                <select id="videos-filter-stars">
+                    <option value="0">Toutes</option>
+                    <option value="1">≥ 1 ★</option>
+                    <option value="2">≥ 2 ★</option>
+                    <option value="3">≥ 3 ★</option>
+                    <option value="4">≥ 4 ★</option>
+                    <option value="5">5 ★</option>
+                </select>
+            </label>
+            <label class="inline-label">Type
+                <select id="videos-filter-kind">
+                    <option value="all">Tout</option>
+                    <option value="video">Vidéos</option>
+                    <option value="photo">Photos</option>
+                </select>
+            </label>
+            <div class="toolbar-btns">
+                <button id="btn-videos-refresh" class="btn btn-primary" type="button">Rafraîchir</button>
+            </div>
+        </div>
+
+        <div class="media-toolbar card">
+            <label class="inline-label sel-all-label">
+                <input type="checkbox" id="media-select-all" class="checkbox"> Tout sélectionner
+            </label>
+            <span class="media-selected" id="media-selected-count">Aucun élément sélectionné</span>
+            <div class="toolbar-btns">
+                <button id="btn-media-view" class="btn btn-ghost" type="button">Visionner</button>
+                <button id="btn-media-rename" class="btn btn-ghost" type="button">Renommer</button>
+                <button id="btn-media-download" class="btn btn-ghost" type="button">Télécharger</button>
+                <button id="btn-media-delete" class="btn btn-danger" type="button">Supprimer</button>
+            </div>
+        </div>
+
+        <p class="videos-count" id="videos-count"></p>
+        <p class="videos-empty card" id="videos-empty" hidden>
+            Aucun média dans le dossier pour l'instant.<br>
+            <span class="hint">Enregistrez depuis le Cockpit (REC / Photo), ou déposez des fichiers
+            <code>.mp4 .mkv .avi .mov .webm .jpg .png</code> dans
+            <code id="videos-folder-info">videos/</code> puis touchez « Rafraîchir ».</span>
+        </p>
+
+        <div class="player-card card" id="player-card" hidden>
+            <div class="player-head">
+                <span class="player-name" id="player-name">—</span>
+                <div class="player-head-right">
+                    <span class="save-state" id="player-saved"></span>
+                    <button id="btn-player-close" class="btn btn-ghost" type="button">Fermer</button>
+                </div>
+            </div>
+            <video id="player-video" controls playsinline preload="metadata"></video>
+            <img id="player-photo" alt="Photo enregistrée" hidden>
+            <div class="player-meta">
+                <div class="stars" id="player-stars" role="radiogroup" aria-label="Évaluation">
+                    <button type="button" class="star" data-value="1" title="1 étoile">★</button>
+                    <button type="button" class="star" data-value="2" title="2 étoiles">★</button>
+                    <button type="button" class="star" data-value="3" title="3 étoiles">★</button>
+                    <button type="button" class="star" data-value="4" title="4 étoiles">★</button>
+                    <button type="button" class="star" data-value="5" title="5 étoiles">★</button>
+                </div>
+                <span class="player-details" id="player-details"></span>
+            </div>
+            <label class="player-notes-label" for="player-notes">Notes</label>
+            <textarea id="player-notes" rows="4" placeholder="Observations, conditions de plongée, matériel…"></textarea>
+            <p class="hint">Notes et étoiles sont enregistrées automatiquement.</p>
+        </div>
+
+        <div class="media-list" id="videos-list"></div>
+    </section>
+
+    <!-- ===== SECTION CAMÉRAS ===== -->
+    <section id="section-cameras" class="section-panel page-container" style="display:none">
+        <h2>Caméras</h2>
+        <p class="page-sub">Périphériques V4L2, résolution et cadence de chaque flux MJPEG, et
+        réglages d'enregistrement utilisés par le Cockpit.</p>
+
+        <div class="card cam-card">
+            <h3>Cam 1 <span class="cam-live" id="cam1-live"></span></h3>
+            <div class="settings-grid">
+                <label>Périphérique
+                    <select id="cam1-device"></select>
+                </label>
+                <label>Résolution
+                    <select id="cam1-resolution"></select>
+                </label>
+                <label>Cadence
+                    <select id="cam1-fps"></select>
+                </label>
+                <label>Qualité JPEG <output id="cam1-quality-val">80</output>
+                    <input type="range" id="cam1-quality" min="1" max="100" step="1" value="80">
+                </label>
+            </div>
+            <p class="hint" id="cam1-dev-info">—</p>
+        </div>
+
+        <div class="card cam-card">
+            <h3>Cam 2 <span class="cam-live" id="cam2-live"></span></h3>
+            <div class="settings-grid">
+                <label>Périphérique
+                    <select id="cam2-device"></select>
+                </label>
+                <label>Résolution
+                    <select id="cam2-resolution"></select>
+                </label>
+                <label>Cadence
+                    <select id="cam2-fps"></select>
+                </label>
+                <label>Qualité JPEG <output id="cam2-quality-val">75</output>
+                    <input type="range" id="cam2-quality" min="1" max="100" step="1" value="75">
+                </label>
+            </div>
+            <p class="hint" id="cam2-dev-info">—</p>
+        </div>
+
+        <div class="card">
+            <h3>Enregistrement (Cockpit)</h3>
+            <div class="settings-grid">
+                <label>Cadence vidéo
+                    <select id="rec-fps">
+                        <option value="10">10 i/s</option>
+                        <option value="15">15 i/s</option>
+                        <option value="24">24 i/s</option>
+                        <option value="30">30 i/s</option>
+                    </select>
+                </label>
+                <label>Débit vidéo <output id="rec-bitrate-val">4 Mbit/s</output>
+                    <input type="range" id="rec-bitrate" min="1" max="12" step="0.5" value="4">
+                </label>
+                <label>Qualité photo <output id="rec-quality-val">90 %</output>
+                    <input type="range" id="rec-quality" min="50" max="100" step="1" value="90">
+                </label>
+            </div>
+            <p class="hint">L'enregistrement vidéo est encodé par le navigateur (WebM) puis déposé sur le Pi ;
+            la photo est capturée du flux affiché (JPEG). Aucune ré-encodage côté Pi.</p>
+            <div class="row-end">
+                <button id="btn-rec-save" class="btn btn-success" type="button">Enregistrer les réglages</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Périphériques détectés</h3>
+            <div id="cams-devices" class="device-list"></div>
+            <p class="hint">
+                Le flux MJPEG est relayé tel quel depuis la caméra : la qualité JPEG est celle du capteur.
+            </p>
+            <div class="row-end">
+                <button id="btn-cameras-save" class="btn btn-success" type="button">Enregistrer &amp; recharger les flux</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== SECTION RÉSEAU ===== -->
+    <section id="section-network" class="section-panel page-container" style="display:none">
+        <h2>Réseau</h2>
+        <p class="page-sub">Accès au cockpit, état des interfaces et gestion WiFi (scan + connexion)
+        via NetworkManager — ou rester en filaire (LAN) uniquement.</p>
+
+        <div class="card">
+            <h3>WiFi</h3>
+            <p class="hint" id="wifi-state">—</p>
+            <div id="net-devices" class="device-list"></div>
+            <div class="row-end">
+                <button id="btn-wifi-scan" class="btn btn-primary" type="button">Scanner les réseaux</button>
+                <button id="btn-lan-only" class="btn btn-ghost" type="button">Rester en LAN uniquement</button>
+            </div>
+            <p class="hint">« Rester en LAN uniquement » déconnecte le WiFi et mémorise la préférence :
+            elle sera réappliquée au démarrage du service. Le WiFi reste activable à tout moment d'ici.</p>
+        </div>
+
+        <div class="card">
+            <h3>Réseaux détectés</h3>
+            <div id="wifi-list" class="device-list">
+                <p class="hint">Touchez « Scanner les réseaux » pour lancer une recherche.</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Accès au cockpit</h3>
+            <div class="settings-grid">
+                <label>Interface d'écoute
+                    <input type="text" id="net-host" placeholder="0.0.0.0">
+                </label>
+                <label>Port
+                    <input type="number" id="net-port" min="1" max="65535" step="1" placeholder="8080">
+                </label>
+            </div>
+            <p class="hint">
+                Une modification demande un redémarrage du service : bouton
+                « Relancer cockpit » (Paramètres → Système) ou <code>sudo systemctl restart bob-rov</code>.
+            </p>
+            <div class="row-end">
+                <button id="btn-network-save" class="btn btn-success" type="button">Enregistrer</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Adresses du cockpit</h3>
+            <div id="net-addresses" class="device-list">—</div>
+            <div class="row-end">
+                <button id="btn-copy-url" class="btn btn-ghost" type="button">Copier l'adresse</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== SECTION MANETTE ===== -->
+    <section id="section-manette" class="section-panel page-container" style="display:none">
+        <h2>Manette</h2>
+        <p class="page-sub">Manettes branchées au poste de pilotage, association de chaque fonction
+        (bouton ou axe), courbe de commande et centrale inertielle.</p>
+
+        <div class="card">
+            <h3>Manettes détectées</h3>
+            <p class="hint">Branchez la manette sur le poste de pilotage (PC) puis appuyez sur un de ses
+            boutons pour la réveiller, avant de scanner.</p>
+            <div id="pad-list" class="device-list">
+                <p class="hint">Aucune manette détectée pour l'instant.</p>
+            </div>
+            <div class="row-end">
+                <button id="btn-pad-scan" class="btn btn-primary" type="button">Scanner les manettes</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Fonctions des manettes</h3>
+            <p class="hint">Choisissez une fonction, cliquez sur « Assigner » dans la colonne de la manette
+            concernée, puis appuyez sur un bouton ou poussez un axe : l'association est enregistrée
+            aussitôt. Chaque manette garde ses propres associations ; la colonne « Toutes les manettes »
+            les applique à toutes.</p>
+            <p class="hint pad-capture-hint" id="pad-capture-hint" hidden></p>
+            <div id="pad-actions" class="pad-fn-table"></div>
+            <div class="row-end">
+                <button id="btn-pad-save" class="btn btn-success" type="button">Enregistrer les manettes</button>
+            </div>
+            <p class="hint">Les associations sont enregistrées dans config.json. Le Sub Simulator les lit
+            directement (avance / recul, latéral, montée / descente, cap, roulis, tangage, armement,
+            éclairage…) ; le bouton assigné à « Enregistrer la vue » pilote la capture vidéo + HUD du
+            cockpit. Tant qu'une fonction n'est pas associée, le Sub Simulator utilise son profil par
+            défaut sur la première manette (△ armer · ○ dry-run · □ lumières · Options E-Stop ·
+            Share RAZ · Croix retour surface).</p>
+        </div>
+
+        <div class="card">
+            <h3>Head-tracker BOB BL AR</h3>
+            <p class="hint">Associez d'abord « Activer / recentrer le head-tracker BOB BL AR » à un bouton
+            de la manette principale dans la table ci-dessus. Cet appui envoie la tare matérielle ; en mode
+            maintenu, les axes routés ci-dessous prennent le relais seulement pendant l'appui.</p>
+            <div class="settings-grid">
+                <label class="switch-label">Routage activé
+                    <input type="checkbox" id="head-enabled" class="switch">
+                </label>
+                <label>Périphérique BOB BL AR
+                    <select id="head-device"></select>
+                </label>
+                <label>Mode de routage
+                    <select id="head-mode">
+                        <option value="hold">Bouton maintenu</option>
+                        <option value="always">Toujours actif</option>
+                    </select>
+                </label>
+            </div>
+            <p id="head-status" class="hint">BOB BL AR non détecté.</p>
+            <div id="head-routes" class="settings-grid"></div>
+            <div class="row-end">
+                <button id="btn-head-route-add" class="btn btn-mini" type="button">Ajouter un routage d'axe</button>
+            </div>
+            <p class="hint">Chaque routage expose la valeur normalisée de l'axe BOB sélectionné (−1 à +1)
+            vers l'action analogique choisie, sans imposer de destination matérielle.</p>
+        </div>
+
+        <div class="card">
+            <h3>Test manette</h3>
+            <p class="hint">Visualisation en direct des manettes de pilotage : joysticks, boutons et axes.
+            Les libellés « Axe n » / « Bouton n » sont ceux de l'association des actions ci-dessus.
+            Sur le dessin PS4 : S = Share, O = Options, PS = bouton PS, la zone tactile est le bouton 17 ;
+            les sélecteurs du panneau BOB BL AR choisissent les axes roulis / tangage / cap et le bouton surveillé.</p>
+            <div class="pad-test-grid">
+                <div class="pad-test-panel">
+                    <h4>PlayStation — DUALSHOCK 4 <span class="pad-test-live" id="pad-ps-live">non connectée</span></h4>
+                    <canvas id="pad-ps-canvas" class="pad-test-canvas" width="320" height="220"></canvas>
+                    <div class="pad-axis-row" id="pad-ps-axes"></div>
+                    <div class="pad-led-row" id="pad-ps-btns"></div>
+                </div>
+                <div class="pad-test-panel">
+                    <h4>BOB BL AR — roulis / tangage / cap <span class="pad-test-live" id="pad-rov-live">non connectée</span></h4>
+                    <div class="pad-rov-map">
+                        <label>Roulis <select id="pad-map-roll"></select></label>
+                        <label>Tangage <select id="pad-map-pitch"></select></label>
+                        <label>Cap <select id="pad-map-yaw"></select></label>
+                        <label>Bouton <select id="pad-map-button"></select></label>
+                    </div>
+                    <canvas id="pad-rov-canvas" class="pad-test-canvas" width="320" height="200"></canvas>
+                    <div class="pad-axis-row" id="pad-rov-axes"></div>
+                    <div class="pad-led-row" id="pad-rov-btns"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Courbe de commande</h3>
+            <div class="settings-grid">
+                <label>Zone morte (deadzone) <output id="in-deadzone-val">0.08</output>
+                    <input type="range" id="in-deadzone" min="0" max="0.5" step="0.01" value="0.08">
+                </label>
+                <label>Exposant (expo) <output id="in-expo-val">1.5</output>
+                    <input type="range" id="in-expo" min="0.5" max="5" step="0.1" value="1.5">
+                </label>
+                <label>Débattement max (µs) <output id="in-maxspeed-val">400</output>
+                    <input type="range" id="in-maxspeed" min="1" max="500" step="1" value="400">
+                </label>
+            </div>
+            <p class="hint">
+                Zone morte = seuil ignoré autour du neutre · expo &gt; 1 = réponse douce en début de course ·
+                débattement max appliqué autour du neutre <span id="in-neutral-hint">1500</span> µs.
+            </p>
+        </div>
+
+        <div class="card">
+            <h3>Centrale inertielle (IMU)</h3>
+            <div class="settings-grid">
+                <label class="switch-label">IMU activée
+                    <input type="checkbox" id="in-imu-enabled" class="switch">
+                </label>
+                <label>Périphérique
+                    <input type="text" id="in-imu-device" placeholder="/dev/i2c-1 ou /dev/ttyACM1">
+                </label>
+            </div>
+            <p class="hint">La lecture de l'IMU (cap, tangage, roulis) sera branchée à l'étape 8.</p>
+        </div>
+
+        <div class="row-end">
+            <button id="btn-controls-save" class="btn btn-success" type="button">Enregistrer</button>
+        </div>
+    </section>
+
+    <!-- ===== SECTION CONFIG COCKPIT (fusion de l'ancienne « Interface ») ===== -->
+    <section id="section-config" class="section-panel page-container" style="display:none">
+        <h2>Config Cockpit</h2>
+        <p class="page-sub">Vue PC du cockpit : apparence, disposition des flux, incrustation télémétrie
+        et organisation des menus.</p>
+
+        <div class="card">
+            <h3>Apparence</h3>
+            <div class="settings-grid">
+                <label class="switch-label">Thème sombre
+                    <input type="checkbox" id="ui-theme-dark" class="switch" checked>
+                </label>
+                <label>Langue
+                    <select id="ui-language">
+                        <option value="fr">Français</option>
+                        <option value="en">English (à venir)</option>
+                    </select>
+                </label>
+            </div>
+            <div class="row-end">
+                <button id="btn-ui-save" class="btn btn-success" type="button">Enregistrer</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Disposition des flux</h3>
+            <div class="settings-grid">
+                <label>Mode par défaut
+                    <select id="cfg-mode">
+                        <option value="solo">Solo (une caméra)</option>
+                        <option value="duo">Côte à côte</option>
+                        <option value="pip">Incrustation (PIP)</option>
+                    </select>
+                </label>
+                <label>Source principale
+                    <select id="cfg-source">
+                        <option value="cam1">Cam 1</option>
+                        <option value="cam2">Cam 2</option>
+                    </select>
+                </label>
+                <label class="switch-label">Incrustation PIP
+                    <input type="checkbox" id="pip-enabled" class="switch" checked>
+                </label>
+                <label>Coin du PIP
+                    <span class="pip-corner-grid" id="pip-corner">
+                        <button type="button" class="pip-corner-btn" data-corner="top-left" title="Haut gauche"></button>
+                        <button type="button" class="pip-corner-btn" data-corner="top-right" title="Haut droite"></button>
+                        <button type="button" class="pip-corner-btn" data-corner="bottom-left" title="Bas gauche"></button>
+                        <button type="button" class="pip-corner-btn active" data-corner="bottom-right" title="Bas droite"></button>
+                    </span>
+                </label>
+                <label>Largeur PIP <output id="pip-width-val">28 %</output>
+                    <input type="range" id="pip-width" min="10" max="60" step="1" value="28">
+                </label>
+                <label>Opacité PIP <output id="pip-opacity-val">90 %</output>
+                    <input type="range" id="pip-opacity" min="20" max="100" step="1" value="90">
+                </label>
+            </div>
+            <p class="hint">Ces réglages sont les valeurs par défaut appliquées à l'ouverture du Cockpit ;
+            les boutons du Cockpit ne changent que la vue en cours.</p>
+            <div class="row-end">
+                <button id="btn-pip-apply" class="btn btn-success" type="button">Enregistrer la disposition</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>HUD télémétrie</h3>
+            <div class="settings-grid switch-grid">
+                <label class="switch-label">Horizon artificiel
+                    <input type="checkbox" id="ovl-horizon" class="switch" checked>
+                </label>
+                <label class="switch-label">Cap (compas)
+                    <input type="checkbox" id="ovl-heading" class="switch" checked>
+                </label>
+                <label class="switch-label">Profondeur
+                    <input type="checkbox" id="ovl-depth" class="switch" checked>
+                </label>
+                <label class="switch-label">Température de l'eau
+                    <input type="checkbox" id="ovl-temperature" class="switch" checked>
+                </label>
+                <label class="switch-label">Moteurs M1–M8
+                    <input type="checkbox" id="ovl-gauges" class="switch" checked>
+                </label>
+                <label class="switch-label">Pince &amp; rotation (voies 9-10)
+                    <input type="checkbox" id="ovl-grip" class="switch" checked>
+                </label>
+                <label class="switch-label">Voies 11–16
+                    <input type="checkbox" id="ovl-aux" class="switch" checked>
+                </label>
+                <label class="switch-label">Voltage
+                    <input type="checkbox" id="ovl-voltage" class="switch" checked>
+                </label>
+                <label class="switch-label">Moteur vertical
+                    <input type="checkbox" id="ovl-motor_v" class="switch" checked>
+                </label>
+                <label class="switch-label">Moteur horizontal
+                    <input type="checkbox" id="ovl-motor_h" class="switch" checked>
+                </label>
+            </div>
+            <p class="hint">Données temps réel de la liaison série — simulées tant qu'aucune trame n'est reçue.
+            « Mise en page » ouvre le Cockpit en mode réglage : glisser = position, poignée = taille,
+            molette = transparence ; couleur, finesse des traits et taille des textes par instrument dans sa
+            barre, puis « Enregistrer » pour écrire la disposition dans config.json.</p>
+            <div class="row-end">
+                <button id="btn-hud-layout" class="btn btn-primary" type="button">Mise en page…</button>
+                <button id="btn-ovl-save" class="btn btn-success" type="button">Enregistrer</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Tableau de bord</h3>
+            <p class="hint">Ordre des tuiles de l'accueil :</p>
+            <p class="tile-order-path" id="ui-tile-order">—</p>
+            <p class="hint">Ordre des tuiles des Paramètres :</p>
+            <p class="tile-order-path" id="ui-params-order">—</p>
+            <div class="row-end">
+                <button id="btn-ui-reset-tiles" class="btn btn-ghost" type="button">Réinitialiser les ordres par défaut</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== SECTION LUNETTES AR ===== -->
+    <section id="section-glasses" class="section-panel page-container" style="display:none">
+        <h2>Lunettes AR</h2>
+        <p class="page-sub">Diffusion du flux vidéo et des données de vol vers les lunettes (étape 9).</p>
+
+        <div class="card">
+            <div class="settings-grid">
+                <label class="switch-label">Diffusion activée
+                    <input type="checkbox" id="ar-enabled" class="switch">
+                </label>
+                <label>Hôte des lunettes
+                    <input type="text" id="ar-host" placeholder="192.168.1.x">
+                </label>
+                <label>Port
+                    <input type="number" id="ar-port" min="1" max="65535" step="1" placeholder="5000">
+                </label>
+            </div>
+            <p class="hint">Le protocole de diffusion AR sera branché à l'étape 9 ; ces réglages sont persistés dès maintenant.</p>
+            <div class="row-end">
+                <button id="btn-glasses-save" class="btn btn-success" type="button">Enregistrer</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== SECTION SUB SIMU (configuration du simulateur) ===== -->
+    <section id="section-sim-config" class="section-panel page-container" style="display:none">
+        <h2>Sub Simu</h2>
+        <p class="page-sub">Configuration du simulateur d'entraînement (étape 10 de la feuille de route).</p>
+
+        <div class="card">
+            <div class="settings-grid">
+                <label class="switch-label">Simulateur activé
+                    <input type="checkbox" id="sim-enabled" class="switch">
+                </label>
+            </div>
+            <p class="hint" id="sim-state">—</p>
+            <p class="hint">
+                Étape 10 : le Sub Simulator remplira la télémétrie (profondeur, attitude, batteries) même
+                sans l'ESP32 branché, pour s'entraîner avant de plonger. Le réglage est conservé dès maintenant.
+            </p>
+            <div class="row-end">
+                <button id="btn-sim-save" class="btn btn-success" type="button">Enregistrer</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== SECTION SUB SIMULATOR (la tuile de l'accueil ouvrira ici) ===== -->
+    <section id="section-simulator" class="section-panel page-container" style="display:none">
+        <h2>Sub Simulator</h2>
+        <p class="page-sub">Simulateur d'entraînement avant plongée, style flight simulator — en construction.</p>
+
+        <div class="card">
+            <h3>État</h3>
+            <p class="hint" id="sim-state-top">—</p>
+            <p class="hint">
+                L'écran de simulation (vue 3D/2D du sous-marin, télémétrie simulée, pannes scriptées)
+                arrivera à l'étape 10 : l'entraînement se fera ici, sans matériel, avant chaque plongée.
+            </p>
+            <div class="row-end">
+                <button id="btn-sim-open-config" class="btn btn-primary" type="button">Configurer le simulateur</button>
+            </div>
+        </div>
+    </section>
+
+    <!-- ===== SECTION SYSTÈME ===== -->
+    <section id="section-system" class="section-panel page-container" style="display:none">
+        <h2>Système</h2>
+        <p class="page-sub">État du socle : version, uptime, liaison série ESP32-S3.</p>
+
+        <div class="card">
+            <h3>Liaison série</h3>
+            <div class="sys-grid" id="sys-serial">
+                <div class="sys-row"><span class="sys-key">Port</span><span class="sys-value" id="sys-serial-port">—</span></div>
+                <div class="sys-row"><span class="sys-key">État</span><span class="sys-value" id="sys-serial-state">—</span></div>
+                <div class="sys-row"><span class="sys-key">Cadences</span><span class="sys-value" id="sys-serial-rates">—</span></div>
+                <div class="sys-row"><span class="sys-key">Compteurs</span><span class="sys-value" id="sys-serial-counts">—</span></div>
+                <div class="sys-row"><span class="sys-key">Dernière erreur</span><span class="sys-value" id="sys-serial-error">—</span></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Cockpit</h3>
+            <div class="sys-grid">
+                <div class="sys-row"><span class="sys-key">Version</span><span class="sys-value" id="sys-version">—</span></div>
+                <div class="sys-row"><span class="sys-key">Uptime</span><span class="sys-value" id="sys-uptime">—</span></div>
+                <div class="sys-row"><span class="sys-key">Modèle ESP32</span><span class="sys-value" id="sys-esp">BOB CONTROL (ESP32-S3) — protocole v1.5.0, 921600 bauds 8N1</span></div>
+            </div>
+            <div class="row-end">
+                <button id="btn-sys-refresh" class="btn btn-ghost" type="button">Rafraîchir</button>
+            </div>
+            <p class="hint">
+                La télémétrie temps réel (WebSocket : profondeur, attitude, batteries) arrive à l'étape 4
+                de la feuille de route.
+            </p>
+        </div>
+
+        <div class="card">
+            <h3>Maintenance</h3>
+            <div class="row-end">
+                <button id="btn-sys-restart" class="btn btn-primary" type="button" title="Relance le service systemd bob-rov : coupure d'environ 3 s, la page se reconnecte automatiquement">Relancer cockpit</button>
+                <button id="btn-sys-reboot" class="btn btn-danger" type="button" title="Reboot complet du Raspberry Pi : coupure d'environ une minute, caméras et liaison série comprises">Redémarrer le Pi</button>
+            </div>
+            <p class="hint">
+                « Relancer cockpit » redémarre le service systemd <code>bob-rov</code> — utile après un
+                changement d'interface d'écoute ou de port. « Redémarrer le Pi » reboote tout le
+                Raspberry Pi : l'écran revient de lui-même après environ une minute.
+            </p>
+        </div>
+    </section>
+
+    <!-- Bouton retour flottant (contextuel : section → sous-menu → accueil) -->
+    <a id="btn-back" class="back-top-btn" href="#" aria-label="Retour">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+    </a>
+
+    <footer class="app-footer">
+        <span>BOBROV <span id="app-version">v—</span></span>
+        <span aria-hidden="true"> | </span>
+        <span>DERO DIDIER</span>
+        <span aria-hidden="true"> | </span>
+        <span>Licence MIT</span>
+    </footer>
+
+    <!-- Voile de maintenance : relance du service ou redémarrage du Pi
+         (sondage du retour serveur, rechargement automatique de la page) -->
+    <div id="sys-overlay" class="sys-overlay" hidden>
+        <div class="feed-spinner"></div>
+        <p class="feed-title" id="sys-overlay-title">MAINTENANCE</p>
+        <p class="feed-detail" id="sys-overlay-detail">—</p>
+        <button id="btn-sys-overlay-reload" class="btn btn-primary" type="button" hidden>Recharger la page</button>
+    </div>
+
+    <div id="toast-container" class="toast-container"></div>
+
+    <script src="app.js"></script>
+    <!-- Sub Simulator : Three.js vendorisé localement (aucun CDN au runtime).
+         Importmap additive, lue uniquement par les modules du dossier sim/. -->
+    <script type="importmap">
+        {
+            "imports": {
+                "three": "/sim/vendor/three.module.js",
+                "three/addons/": "/sim/vendor/addons/"
+            }
+        }
+    </script>
+    <!-- Sub Simulator : module isolé (dossier sim/, aucun impact sur le reste) -->
+    <script type="module" src="sim/sim.js"></script>
 </body>
 </html>

@@ -22,4 +22,7 @@ PY
 read -r HOST PORT <<< "$CONFIG_LINE"
 
 echo "[BOBROV] Écoute sur http://${HOST}:${PORT} — Ctrl+C pour arrêter"
-exec .venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT"
+# --timeout-graceful-shutdown : les flux MJPEG ouverts (clients navigateur)
+# sont coupés après 3 s au lieu de faire attendre systemd (voir aussi
+# TimeoutStopSec dans deploy/bob-rov.service).
+exec .venv/bin/uvicorn app.main:app --host "$HOST" --port "$PORT" --timeout-graceful-shutdown 3

@@ -14,6 +14,8 @@ WorkingDirectory=/home/bob/BOBROV-V2
 ExecStart=/home/bob/BOBROV-V2/run.sh
 Restart=always
 RestartSec=3
+# Les flux MJPEG ouverts ne doivent jamais bloquer un redémarrage.
+TimeoutStopSec=15
 
 [Install]
 WantedBy=multi-user.target

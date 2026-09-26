@@ -1,6 +1,8 @@
 # BOBROV — dépendances du cockpit (Raspberry Pi 5)
-# Étape 1 : socle web + série. Les briques suivantes s'ajouteront ici.
+# Étape 1 : socle web + série. Étape 6 : flux vidéo V4L2 (aucune dépendance
+# supplémentaire — ioctls/mmap en bibliothèque standard).
 fastapi>=0.115
 uvicorn[standard]>=0.30
 pyserial>=3.5
 pytest>=8.0
+httpx2>=2.13        # TestClient FastAPI/Starlette (tests d'API)

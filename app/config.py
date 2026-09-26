@@ -8,6 +8,10 @@ toute clé absente est complétée par son défaut, toute écriture est validée
 
 Bornes série issues de PROTOCOLE_RPI5.md §4.2 : cadence descendante
 recommandée 20–50 Hz, watchdog firmware 500 ms par défaut (§6.1).
+
+Liaison : 921600 bauds 8N1, UART natif GPIO 14/15 → ``/dev/serial0``
+(alias udev stable : ttyAMA10 sur Pi 5, ttyAMA0 sur Pi 4/3) ; alternative
+USB-CDC : ``/dev/ttyACM0``.
 """
 from __future__ import annotations
 
@@ -28,7 +32,9 @@ PIP_CORNERS = ("top-left", "top-right", "bottom-left", "bottom-right")
 DEFAULTS: dict = {
     "config_version": 1,
     "serial": {
-        "port": "/dev/ttyACM0",
+        # UART natif GPIO 14/15 : /dev/serial0 (alias stable → ttyAMA10 sur Pi 5,
+        # ttyAMA0 sur Pi 4/3). Alternative USB-CDC : /dev/ttyACM0.
+        "port": "/dev/serial0",
         "baud": 921600,
         "tx_hz": 25,
         "reconnect_delay_s": 2,
@@ -36,6 +42,9 @@ DEFAULTS: dict = {
     "network": {
         "host": "0.0.0.0",
         "port": 8080,
+        # Préférence « rester en LAN uniquement » : False ⇒ l'interface WiFi
+        # est déconnectée au démarrage (piloté depuis la section RÉSEAU).
+        "wifi_enabled": True,
     },
     "cameras": {
         "cam1": {
@@ -58,15 +67,110 @@ DEFAULTS: dict = {
             "width_percent": 28,
             "opacity": 0.9,
         },
+        # Enregistrement depuis le cockpit (section CAMÉRAS → carte dédiée).
+        "recording": {
+            "video_fps": 30,
+            "video_bitrate_mbps": 4,
+            "photo_quality": 90,
+        },
     },
     "input": {
         "deadzone": 0.08,
         "expo": 1.5,
         "max_speed_us": 400,
         "imu": {"enabled": False, "device": ""},
+        # Manettes (section MANETTE) : voies PWM du ROV et commandes du poste
+        # (ex. enregistrement de la vue) ; la source est
+        # {"type": "axis"|"button", "index": n, "invert": bool}.
+        "gamepad": {
+            "enabled": False,
+            "actions": [
+                {"id": "voie1", "label": "Voie 1", "source": None},
+                {"id": "voie2", "label": "Voie 2", "source": None},
+                {"id": "voie3", "label": "Voie 3", "source": None},
+                {"id": "voie4", "label": "Voie 4", "source": None},
+                {"id": "voie5", "label": "Voie 5", "source": None},
+                {"id": "voie6", "label": "Voie 6", "source": None},
+                {"id": "rec_view", "label": "Enregistrer la vue (vidéo + HUD)",
+                 "source": None},
+                {"id": "rec", "label": "Enregistrer la vidéo (sans HUD)",
+                 "source": None},
+                {"id": "swap_cams", "label": "Permuter les caméras",
+                 "source": None},
+                {"id": "toggle_toolbar", "label": "Replier / déplier la barre de commandes",
+                 "source": None},
+                {"id": "head_tracker_engage", "label": "Activer / recentrer le head-tracker BOB BL AR",
+                 "source": None},
+            ],
+        },
+        # BOB BL AR : source d'orientation BLE routable vers une action axe
+        # existante. Aucune destination matérielle n'est imposée ici.
+        "head_tracker": {
+            "enabled": False,
+            "device_id": "",
+            "mode": "hold",              # hold = bouton maintenu, always = routage permanent
+            "routes": [],                  # {axis, action, invert}
+        },
     },
     "ar_glasses": {"enabled": False, "host": "", "port": 5000},
-    "interface": {"theme": "dark", "language": "fr", "tile_order": []},
+    "interface": {
+        "theme": "dark",
+        "language": "fr",
+        "tile_order": [],
+        "parameters_order": [],
+    },
+    # Vue de pilotage (section CONFIG COCKPIT) : disposition par défaut,
+    # éléments de télémétrie à incruster et mise en page HUD (positions en %
+    # de l'image vidéo — réglables à la souris dans le Cockpit).
+    "cockpit": {
+        "mode": "pip",
+        "source": "cam1",
+        "overlay": {
+            "horizon": True,
+            "heading": True,
+            "depth": True,
+            "temperature": True,
+            "gauges": True,
+            "grip": True,
+            "aux": True,
+            "voltage": True,
+            "motor_v": True,
+            "motor_h": True,
+        },
+        "hud": {
+            "elements": {
+                "horizon":  {"x": 37.0, "y": 12.0, "w": 26.0, "h": 40.0, "opacity": 0.92,
+                             "color": "#00d9ff", "weight": 1.0, "font": 1.0},
+                "heading":  {"x": 34.0, "y": 3.0,  "w": 32.0, "h": 8.0,  "opacity": 0.92,
+                             "color": "#00d9ff", "weight": 1.0, "font": 1.0},
+                # Jauge de profondeur : « max » = profondeur max en mètres
+                # (échelle du cadran, virage au rouge et clignotement à −2 m).
+                "depth":    {"x": 82.0, "y": 8.0,  "w": 15.0, "h": 56.0, "opacity": 0.92,
+                             "color": "#00d9ff", "weight": 1.0, "font": 1.0, "max": 100.0},
+                # Température de l'eau : instrument séparé, réglable indépendamment.
+                "temperature": {"x": 82.0, "y": 64.5, "w": 15.0, "h": 5.2, "opacity": 0.92,
+                                "color": "#00d9ff", "weight": 1.0, "font": 1.0},
+                # Jauges moteurs M1–M8 (style Sub Simulator) : 8 barres divergentes
+                # du neutre, alimentées par l'écho PWM des voies 1 à 8.
+                "gauges":   {"x": 0.5,  "y": 56.0, "w": 26.0, "h": 25.0, "opacity": 0.92,
+                             "color": "#00d9ff", "weight": 1.0, "font": 1.0},
+                # Pince et rotation de pince : voies PWM 9 et 10 en microsecondes.
+                "grip":     {"x": 27.0, "y": 56.0, "w": 12.5, "h": 8.5,  "opacity": 0.92,
+                             "color": "#00d9ff", "weight": 1.0, "font": 1.0},
+                # Voies PWM restantes 11 à 16 (auxiliaires).
+                "aux":      {"x": 27.0, "y": 65.5, "w": 12.5, "h": 27.0, "opacity": 0.92,
+                             "color": "#00d9ff", "weight": 1.0, "font": 1.0},
+                # Trois jauges réglables séparément : tension batterie, courant des
+                # moteurs verticaux et horizontaux (empilées en bas à gauche).
+                "voltage":  {"x": 0.5,  "y": 81.5, "w": 13.8, "h": 5.2,  "opacity": 0.92,
+                             "color": "#00d9ff", "weight": 1.0, "font": 1.0},
+                "motor_v":  {"x": 0.5,  "y": 87.3, "w": 13.8, "h": 5.2,  "opacity": 0.92,
+                             "color": "#00d9ff", "weight": 1.0, "font": 1.0},
+                "motor_h":  {"x": 0.5,  "y": 93.1, "w": 13.8, "h": 5.2,  "opacity": 0.92,
+                             "color": "#00d9ff", "weight": 1.0, "font": 1.0},
+            },
+        },
+    },
     "videos": {"folder": "videos", "auto_record": False},
     "simulator": {"enabled": False},
     "safety": {"watchdog_ms": 500, "surface_pressure_mbar": 1013.25, "neutral_us": 1500},
@@ -105,11 +209,25 @@ def _require(condition: bool, message: str) -> None:
         raise ConfigError(message)
 
 
+def _valid_source(source) -> bool:
+    """Source manette : {type: axis|button, index: 0-64, invert: bool, pad?: str}.
+
+    ``pad`` identifie la manette d'origine (``Gamepad.id`` du navigateur) ;
+    absent, la source vaut pour toutes les manettes.
+    """
+    return (isinstance(source, dict)
+            and source.get("type") in ("axis", "button")
+            and _is_int(source.get("index")) and 0 <= source["index"] <= 64
+            and isinstance(source.get("invert", False), bool)
+            and (source.get("pad") is None
+                 or (isinstance(source.get("pad"), str) and len(source["pad"]) <= 120)))
+
+
 def _validate(cfg: dict) -> None:
     """Vérifie types et bornes des sections connues (les clés libres sont tolérées)."""
     serial = cfg["serial"]
     _require(isinstance(serial["port"], str) and serial["port"].strip() != "",
-             "serial.port : chaîne non vide attendue (ex. /dev/ttyACM0)")
+             "serial.port : chaîne non vide attendue (ex. /dev/serial0)")
     _require(_is_int(serial["baud"]) and serial["baud"] > 0,
              "serial.baud : entier positif attendu (ex. 921600)")
     _require(_is_number(serial["tx_hz"]) and 1 <= serial["tx_hz"] <= 100,
@@ -122,6 +240,8 @@ def _validate(cfg: dict) -> None:
              "network.host : chaîne non vide attendue (ex. 0.0.0.0)")
     _require(_is_int(network["port"]) and 1 <= network["port"] <= 65535,
              "network.port : port TCP attendu entre 1 et 65535")
+    _require(isinstance(network["wifi_enabled"], bool),
+             "network.wifi_enabled : booléen attendu (False = rester en LAN uniquement)")
 
     for name in ("cam1", "cam2"):
         cam = cfg["cameras"][name]
@@ -145,6 +265,14 @@ def _validate(cfg: dict) -> None:
     _require(_is_number(pip["opacity"]) and 0 <= pip["opacity"] <= 1,
              "cameras.pip.opacity : opacité attendue entre 0 et 1")
 
+    recording = cfg["cameras"]["recording"]
+    _require(_is_number(recording["video_fps"]) and 1 <= recording["video_fps"] <= 60,
+             "cameras.recording.video_fps : cadence vidéo attendue entre 1 et 60")
+    _require(_is_number(recording["video_bitrate_mbps"]) and 0.1 <= recording["video_bitrate_mbps"] <= 50,
+             "cameras.recording.video_bitrate_mbps : débit attendu entre 0,1 et 50 Mbit/s")
+    _require(_is_int(recording["photo_quality"]) and 1 <= recording["photo_quality"] <= 100,
+             "cameras.recording.photo_quality : qualité photo attendue entre 1 et 100")
+
     inp = cfg["input"]
     _require(_is_number(inp["deadzone"]) and 0 <= inp["deadzone"] < 1,
              "input.deadzone : zone morte attendue entre 0 et 1 (valeur 1 exclue)")
@@ -154,6 +282,43 @@ def _validate(cfg: dict) -> None:
              "input.max_speed_us : débattement maximal attendu entre 1 et 500 µs")
     _require(isinstance(inp["imu"]["enabled"], bool), "input.imu.enabled : booléen attendu")
     _require(isinstance(inp["imu"]["device"], str), "input.imu.device : chaîne attendue")
+
+    head_tracker = inp["head_tracker"]
+    _require(isinstance(head_tracker, dict), "input.head_tracker : objet attendu")
+    _require(isinstance(head_tracker.get("enabled"), bool),
+             "input.head_tracker.enabled : booléen attendu")
+    _require(isinstance(head_tracker.get("device_id"), str)
+             and len(head_tracker["device_id"]) <= 120,
+             "input.head_tracker.device_id : chaîne de 120 caractères maximum attendue")
+    _require(head_tracker.get("mode") in ("hold", "always"),
+             "input.head_tracker.mode : valeur 'hold' ou 'always' attendue")
+    routes = head_tracker.get("routes")
+    _require(isinstance(routes, list), "input.head_tracker.routes : liste attendue")
+    for route in routes:
+        _require(isinstance(route, dict)
+                 and _is_int(route.get("axis")) and 0 <= route["axis"] <= 64
+                 and isinstance(route.get("action"), str) and route["action"].strip() != ""
+                 and len(route["action"]) <= 64
+                 and isinstance(route.get("invert", False), bool),
+                 "input.head_tracker.routes[] : objet {axis: 0-64, action: texte, invert: bool} attendu")
+
+    gamepad = inp["gamepad"]
+    _require(isinstance(gamepad["enabled"], bool), "input.gamepad.enabled : booléen attendu")
+    _require(isinstance(gamepad["actions"], list), "input.gamepad.actions : liste attendue")
+    for action in gamepad["actions"]:
+        _require(isinstance(action, dict) and isinstance(action.get("id"), str) and action["id"].strip() != "",
+                 "input.gamepad.actions[] : objet {id, label, sources} attendu")
+        _require(isinstance(action.get("label"), str),
+                 f"input.gamepad.actions[{action['id']}].label : chaîne attendue")
+        source = action.get("source")                       # format hérité : une seule source
+        _require(source is None or _valid_source(source),
+                 f"input.gamepad.actions[{action['id']}].source : "
+                 "{type: axis|button, index: 0-64, invert: bool} attendu")
+        sources = action.get("sources")                     # format courant : une source par manette
+        _require(sources is None
+                 or (isinstance(sources, list) and all(_valid_source(item) for item in sources)),
+                 f"input.gamepad.actions[{action['id']}].sources : liste de "
+                 "{type: axis|button, index: 0-64, invert: bool, pad: nom de manette} attendue")
 
     ar = cfg["ar_glasses"]
     _require(isinstance(ar["enabled"], bool), "ar_glasses.enabled : booléen attendu")
@@ -166,6 +331,45 @@ def _validate(cfg: dict) -> None:
     _require(ui["language"] in ("fr", "en"), "interface.language : « fr » ou « en » attendu")
     _require(isinstance(ui["tile_order"], list) and all(isinstance(t, str) for t in ui["tile_order"]),
              "interface.tile_order : liste d'identifiants (chaînes) attendue")
+    _require(isinstance(ui["parameters_order"], list) and all(isinstance(t, str) for t in ui["parameters_order"]),
+             "interface.parameters_order : liste d'identifiants (chaînes) attendue")
+
+    cockpit = cfg["cockpit"]
+    _require(cockpit["mode"] in ("solo", "duo", "pip"),
+             "cockpit.mode : « solo », « duo » ou « pip » attendu")
+    _require(cockpit["source"] in ("cam1", "cam2"),
+             "cockpit.source : « cam1 » ou « cam2 » attendu")
+    for key, value in cockpit["overlay"].items():
+        _require(isinstance(value, bool), f"cockpit.overlay.{key} : booléen attendu")
+
+    hud_elements = cockpit["hud"]["elements"]
+    _require(isinstance(hud_elements, dict) and bool(hud_elements),
+             "cockpit.hud.elements : objet non vide attendu")
+    for key, element in hud_elements.items():
+        _require(isinstance(element, dict),
+                 f"cockpit.hud.elements.{key} : objet {{x, y, w, h, opacity, color, weight, font, max ?}} attendu")
+        for field in ("x", "y", "w", "h"):
+            _require(_is_number(element.get(field)) and 0 <= element[field] <= 100,
+                     f"cockpit.hud.elements.{key}.{field} : pourcentage attendu entre 0 et 100")
+        _require(element["w"] >= 4 and element["h"] >= 4,
+                 f"cockpit.hud.elements.{key} : taille minimale de 4 % de l'écran attendue")
+        _require(_is_number(element.get("opacity")) and 0.05 <= element["opacity"] <= 1,
+                 f"cockpit.hud.elements.{key}.opacity : opacité attendue entre 0,05 et 1")
+        color = element.get("color", "#00d9ff")
+        _require(isinstance(color, str) and len(color) == 7 and color.startswith("#")
+                 and all(ch in "0123456789abcdefABCDEF" for ch in color[1:]),
+                 f"cockpit.hud.elements.{key}.color : couleur « #rrggbb » attendue")
+        weight = element.get("weight", 1.0)
+        _require(_is_number(weight) and 0.5 <= weight <= 2.5,
+                 f"cockpit.hud.elements.{key}.weight : finesse attendue entre 0,5 et 2,5")
+        font = element.get("font", 1.0)
+        _require(_is_number(font) and 0.5 <= font <= 2.5,
+                 f"cockpit.hud.elements.{key}.font : taille de texte attendue entre 0,5 et 2,5")
+        # « max » (optionnel, jauge de profondeur) : profondeur max en mètres.
+        max_depth = element.get("max")
+        if max_depth is not None:
+            _require(_is_number(max_depth) and 5 <= max_depth <= 500,
+                     f"cockpit.hud.elements.{key}.max : profondeur max attendue entre 5 et 500 m")
 
     videos = cfg["videos"]
     _require(isinstance(videos["folder"], str) and videos["folder"].strip() != "",
