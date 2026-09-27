@@ -592,6 +592,9 @@ class CameraSource:
                 "name": self.name,
                 "state": self._state,
                 "device": self._device,
+                # « configured » : un périphérique est assigné dans config.json.
+                # cam3 (Arrière) peut rester volontairement non assignée.
+                "configured": bool(str(self._camera_config()["device"]).strip()),
                 "card": self._card,
                 "clients": self._clients,
                 "frames_total": self._frames_total,
@@ -696,14 +699,20 @@ class CameraSource:
 
 
 # ---------------------------------------------------------------------------
-# Gestionnaire global (cam1 + cam2)
+# Gestionnaire global (cam1 + cam2 + cam3)
 # ---------------------------------------------------------------------------
 
 class VideoManager:
-    """Singleton des deux caméras du cockpit (cycle de vie lié à FastAPI)."""
+    """Singleton des trois caméras du cockpit (cycle de vie lié à FastAPI).
+
+    cam1 = Caméra Gauche (Avant G), cam2 = Caméra Droite (Avant D),
+    cam3 = Caméra Arrière (périphérique assignable, vide par défaut).
+    """
+
+    CAMERAS = ("cam1", "cam2", "cam3")
 
     def __init__(self) -> None:
-        self._sources = {"cam1": CameraSource("cam1"), "cam2": CameraSource("cam2")}
+        self._sources = {name: CameraSource(name) for name in self.CAMERAS}
 
     def start(self) -> None:
         for source in self._sources.values():
@@ -730,7 +739,7 @@ VIDEO = VideoManager()
 
 
 def get_video() -> VideoManager:
-    """Accès au gestionnaire vidéo global (deux caméras)."""
+    """Accès au gestionnaire vidéo global (trois caméras)."""
     return VIDEO
 
 
@@ -775,7 +784,7 @@ router = APIRouter(prefix="/api/video", tags=["video"])
 
 @router.get("/status", summary="État des flux vidéo")
 async def video_status() -> dict:
-    """État temps réel de cam1/cam2 (sans énumération des devices — léger)."""
+    """État temps réel de cam1/cam2/cam3 (sans énumération des devices — léger)."""
     return {"status": "ok", "cameras": get_video().get_status()}
 
 
@@ -804,7 +813,7 @@ async def video_frame(cam: str) -> Response:
     """
     source = get_video().source(cam)
     if source is None:
-        raise HTTPException(status_code=404, detail=f"caméra inconnue : {cam} (cam1, cam2)")
+        raise HTTPException(status_code=404, detail=f"caméra inconnue : {cam} (cam1, cam2, cam3)")
     source.add_client(quiet=True)
     try:
         got = await asyncio.to_thread(source.wait_fresh_frame, _STALL_TIMEOUT_S, _FRAME_WAIT_TIMEOUT_S)
@@ -821,10 +830,10 @@ async def video_frame(cam: str) -> Response:
 
 @router.get("/{cam}", summary="Flux MJPEG d'une caméra")
 async def video_feed(cam: str) -> StreamingResponse:
-    """Flux MJPEG indépendant (``multipart/x-mixed-replace``) de cam1 ou cam2."""
+    """Flux MJPEG indépendant (``multipart/x-mixed-replace``) de cam1, cam2 ou cam3."""
     source = get_video().source(cam)
     if source is None:
-        raise HTTPException(status_code=404, detail=f"caméra inconnue : {cam} (cam1, cam2)")
+        raise HTTPException(status_code=404, detail=f"caméra inconnue : {cam} (cam1, cam2, cam3)")
     return StreamingResponse(
         mjpeg_stream(source),
         media_type=f"multipart/x-mixed-replace; boundary={_MJPEG_BOUNDARY}",

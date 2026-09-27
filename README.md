@@ -46,23 +46,26 @@ Le dossier `static/sim/` contient le Sub Simulator : moteur physique six degrés
 
 Le tracker est volontairement indépendant de toute destination matérielle. Sa configuration se trouve dans **Paramètres → Manette → Head-tracker BOB BL AR**.
 
-1. Dans la table des fonctions, associez `Activer / recentrer le head-tracker BOB BL AR` à un bouton de la manette principale.
-2. Activez le routage, choisissez le périphérique BOB BL AR et le mode : bouton maintenu ou toujours actif.
-3. Ajoutez un ou plusieurs routages `axe BOB → action analogique` et, si nécessaire, inversez l'axe.
+1. Cliquez sur `Définir le bouton magique`, puis appuyez sur le bouton choisi de la manette principale, par exemple L2.
+2. Sur une action analogique de la table (par exemple *Roulis*), cliquez `Assigner tête`.
+3. Maintenez le bouton magique : le cockpit envoie la tare, attend que le tracker se stabilise, puis capture automatiquement le premier axe qui bouge lorsque vous faites le geste de tête.
 
-À chaque front montant du bouton d'engagement, le cockpit envoie au BOB BL AR :
+À chaque front montant du bouton d'engagement, le cockpit envoie au BOB BL AR un Output Report HID de tare. Il privilégie `vibrationActuator.playEffect('dual-rumble', ...)` lorsqu'il est exposé par le navigateur, puis bascule automatiquement vers WebHID si ce canal Gamepad n'est pas disponible.
 
-```js
-vibrationActuator.playEffect('dual-rumble', {
-  duration: 100,
-  strongMagnitude: 1.0,
-  weakMagnitude: 1.0,
-})
+Le repli WebHID écrit directement le Report ID `1` avec la charge utile `FF FF 64 00` : deux magnitudes non nulles et une durée de 100 ms little-endian. Cliquez une fois sur `Associer BOB BL AR (WebHID)` dans la carte Manette pour donner l'autorisation au navigateur ; les tares suivantes sont ensuite automatiques depuis le bouton magique.
+
+> WebHID exige Chromium/Chrome récent dans un **contexte sécurisé** : `https://…` ou `http://localhost`. Une page ouverte par HTTP sur une adresse LAN ne peut pas demander cette autorisation. Utilisez un accès local au Pi ou servez le cockpit derrière HTTPS.
+
+Sur Raspberry Pi OS/Linux, installez aussi la règle udev fournie puis reconnectez le BOB BL AR :
+
+```bash
+sudo install -m 0644 deploy/99-bob-bl-ar-hid.rules /etc/udev/rules.d/99-bob-bl-ar-hid.rules
+sudo usermod -aG plugdev bob
+sudo udevadm control --reload-rules
+sudo udevadm trigger --subsystem-match=hidraw
 ```
 
-Cet Output Report HID déclenche la tare matérielle du tracker. Un anti-rebond frontend de 250 ms complète celui du firmware. Pendant l'activation, chaque axe routé expose une consigne normalisée entre `-1.0` et `+1.0`, sans imposer de caméra, pan/tilt ou voie matérielle. La consigne est publiée dans `window.BOBROV_HEAD_TRACKER_INPUT` et via l'événement `bobrov:head-tracker-input`; le Sub Simulator consomme également ce routage.
-
-La disponibilité de `vibrationActuator` dépend du navigateur et de la pile HID de l'OS. Chrome ou Edge sont recommandés. Si cette API n'est pas exposée, la tare haptique est signalée comme indisponible sans empêcher le reste du routage.
+Fermez et rouvrez la session de l'utilisateur qui exécute Chromium après l'ajout au groupe. Un anti-rebond frontend de 250 ms complète celui du firmware. En pilotage, le maintien du bouton magique active uniquement les gestes déjà capturés ; chaque axe routé expose une consigne normalisée entre `-1.0` et `+1.0`, sans imposer de caméra, pan/tilt ou voie matérielle. La consigne est publiée dans `window.BOBROV_HEAD_TRACKER_INPUT` et via l'événement `bobrov:head-tracker-input`; le Sub Simulator consomme également ce routage.
 
 ## Installation
 
@@ -131,7 +134,7 @@ Le harnais du simulateur est disponible depuis son interface. Les essais de rend
 app/                 Backend FastAPI, configuration, série, vidéo et routeurs
 static/              SPA cockpit, HUD Canvas et Sub Simulator Three.js
 tests/               Tests automatisés Python
-deploy/              Unité systemd versionnée
+deploy/              Unité systemd et règle udev WebHID versionnées
 videos/.gitkeep      Répertoire de médias local, vide dans Git
 logs/.gitkeep        Répertoire de logs local, vide dans Git
 run.sh               Lance Uvicorn depuis l'environnement virtuel

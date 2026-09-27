@@ -29,6 +29,13 @@ CONFIG_PATH = PROJECT_ROOT / "config.json"
 
 PIP_CORNERS = ("top-left", "top-right", "bottom-left", "bottom-right")
 
+# Priorité des liens réseau (section RÉSEAU) :
+#   lan_first  — le câble d'abord, le WiFi en secours (défaut) ;
+#   wifi_first — le WiFi d'abord, le câble en secours ;
+#   lan_only   — WiFi déconnecté (relançable depuis l'interface) ;
+#   wifi_only  — Ethernet déconnecté (installations sans câble).
+NETWORK_MODES = ("lan_first", "wifi_first", "lan_only", "wifi_only")
+
 DEFAULTS: dict = {
     "config_version": 1,
     "serial": {
@@ -42,11 +49,18 @@ DEFAULTS: dict = {
     "network": {
         "host": "0.0.0.0",
         "port": 8080,
-        # Préférence « rester en LAN uniquement » : False ⇒ l'interface WiFi
-        # est déconnectée au démarrage (piloté depuis la section RÉSEAU).
-        "wifi_enabled": True,
+        # Priorité des liens, appliquée au démarrage et depuis la section
+        # RÉSEAU (métriques de route 100/600 posées via nmcli + activation ou
+        # déconnexion du WiFi / de l'Ethernet selon le mode).
+        "mode": "lan_first",
+        # Test de débit navigateur → Pi (section RÉSEAU) : durée de chaque
+        # phase (le débit s'adapte à la vitesse du lien) et débit considéré
+        # comme confortable pour une caméra MJPEG (≈ 6–12 Mbit/s selon la scène).
+        "speedtest": {"duration_s": 8, "mbps_per_camera": 8},
     },
     "cameras": {
+        # Rôles du poste (section CAMÉRAS) : cam1 = Caméra Gauche (Avant G),
+        # cam2 = Caméra Droite (Avant D), cam3 = Caméra Arrière.
         "cam1": {
             "device": "/dev/video0",
             "width": 1280,
@@ -56,6 +70,15 @@ DEFAULTS: dict = {
         },
         "cam2": {
             "device": "/dev/video2",
+            "width": 640,
+            "height": 480,
+            "fps": 30,
+            "jpeg_quality": 75,
+        },
+        # Vue Arrière : chemin vide tant qu'aucun périphérique n'est assigné
+        # (la validation l'accepte) ; renseignez-le depuis Paramètres → Caméras.
+        "cam3": {
+            "device": "",
             "width": 640,
             "height": 480,
             "fps": 30,
@@ -73,6 +96,10 @@ DEFAULTS: dict = {
             "video_bitrate_mbps": 4,
             "photo_quality": 90,
         },
+        # Enregistrement stéréoscopique 3D (case « 3D » du cockpit) : un flux
+        # par œil — deux fichiers MP4 horodatés <stamp>_camG.mp4 et
+        # <stamp>_camD.mp4, capturés en parallèle par le backend (ffmpeg).
+        "stereo": {"left_device": "/dev/video0", "right_device": "/dev/video2"},
     },
     "input": {
         "deadzone": 0.08,
@@ -95,9 +122,23 @@ DEFAULTS: dict = {
                  "source": None},
                 {"id": "rec", "label": "Enregistrer la vidéo (sans HUD)",
                  "source": None},
+                {"id": "rec_3d", "label": "Enregistrer la vidéo en stéréo 3D (deux caméras)",
+                 "source": None},
                 {"id": "swap_cams", "label": "Permuter les caméras",
                  "source": None},
                 {"id": "toggle_toolbar", "label": "Replier / déplier la barre de commandes",
+                 "source": None},
+                {"id": "fullscreen", "label": "Plein écran — activer / quitter",
+                 "source": None},
+                # Autopilote BOB-CONTROL : bascules du masque d'assistances
+                # (PROTOCOLE_RPI5.md §4, v1.4.0+) — assignables aux boutons.
+                {"id": "assist_rt", "label": "Autopilote — stabiliser roulis / tangage",
+                 "source": None},
+                {"id": "assist_depth", "label": "Autopilote — tenir la profondeur",
+                 "source": None},
+                {"id": "assist_cap", "label": "Autopilote — tenir le cap",
+                 "source": None},
+                {"id": "assist_passif", "label": "Autopilote — tout couper (passif)",
                  "source": None},
                 {"id": "head_tracker_engage", "label": "Activer / recentrer le head-tracker BOB BL AR",
                  "source": None},
@@ -185,6 +226,41 @@ class ConfigError(Exception):
 # Helpers internes
 # ---------------------------------------------------------------------------
 
+def _migrate(raw: dict) -> dict:
+    """Migrations douces des anciennes clés (fichier utilisateur conservé).
+
+    ``network.wifi_enabled`` (booléen historique) devient ``network.mode`` :
+    True équivalait à « LAN prioritaire », False à « LAN uniquement ».
+    ``network.speedtest.size_mb`` (échantillon fixe) disparaît au profit de
+    ``duration_s`` : le test s'adapte désormais à la vitesse du lien.
+    ``cameras.stereo`` (enregistrement 3D) : les deux côtés sont initialisés
+    avec le binôme cam1/cam2 déjà configuré (Avant G + Avant D), puis restent
+    indépendants.
+    """
+    net = raw.get("network")
+    if isinstance(net, dict):
+        if "wifi_enabled" in net:
+            legacy = net.pop("wifi_enabled")
+            net.setdefault("mode", "lan_first" if legacy else "lan_only")
+        speedtest = net.get("speedtest")
+        if isinstance(speedtest, dict):
+            speedtest.pop("size_mb", None)
+    cams = raw.get("cameras")
+    if isinstance(cams, dict):
+        stereo = cams.get("stereo")
+        if not isinstance(stereo, dict):
+            stereo = {}
+            cams["stereo"] = stereo
+        for side, cam_name in (("left_device", "cam1"), ("right_device", "cam2")):
+            current = stereo.get(side)
+            if isinstance(current, str) and current.strip():
+                continue
+            cam = cams.get(cam_name)
+            device = cam.get("device") if isinstance(cam, dict) else None
+            stereo[side] = str(device).strip() or DEFAULTS["cameras"][cam_name]["device"]
+    return raw
+
+
 def _deep_merge(base: dict, override: dict) -> dict:
     """Fusion récursive de ``override`` par-dessus ``base`` (sans mutation)."""
     merged = copy.deepcopy(base)
@@ -240,13 +316,21 @@ def _validate(cfg: dict) -> None:
              "network.host : chaîne non vide attendue (ex. 0.0.0.0)")
     _require(_is_int(network["port"]) and 1 <= network["port"] <= 65535,
              "network.port : port TCP attendu entre 1 et 65535")
-    _require(isinstance(network["wifi_enabled"], bool),
-             "network.wifi_enabled : booléen attendu (False = rester en LAN uniquement)")
+    _require(network["mode"] in NETWORK_MODES,
+             "network.mode : valeur attendue parmi " + ", ".join(NETWORK_MODES))
+    speedtest = network["speedtest"]
+    _require(_is_number(speedtest["duration_s"]) and 1 <= speedtest["duration_s"] <= 30,
+             "network.speedtest.duration_s : durée attendue entre 1 et 30 secondes")
+    _require(_is_number(speedtest["mbps_per_camera"]) and 1 <= speedtest["mbps_per_camera"] <= 200,
+             "network.speedtest.mbps_per_camera : débit attendu entre 1 et 200 Mbit/s")
 
-    for name in ("cam1", "cam2"):
+    for name in ("cam1", "cam2", "cam3"):
         cam = cfg["cameras"][name]
-        _require(isinstance(cam["device"], str) and cam["device"].strip() != "",
-                 f"cameras.{name}.device : chaîne non vide attendue (ex. /dev/video0)")
+        # cam3 (vue Arrière) peut rester non assignée : chemin vide accepté,
+        # mais tout chemin fourni est validé comme les deux autres caméras.
+        if name != "cam3" or str(cam["device"]).strip() != "":
+            _require(isinstance(cam["device"], str) and cam["device"].strip() != "",
+                     f"cameras.{name}.device : chaîne non vide attendue (ex. /dev/video0)")
         _require(_is_int(cam["width"]) and 16 <= cam["width"] <= 7680,
                  f"cameras.{name}.width : largeur attendue entre 16 et 7680")
         _require(_is_int(cam["height"]) and 16 <= cam["height"] <= 4320,
@@ -255,6 +339,11 @@ def _validate(cfg: dict) -> None:
                  f"cameras.{name}.fps : cadence attendue entre 1 et 120")
         _require(_is_int(cam["jpeg_quality"]) and 1 <= cam["jpeg_quality"] <= 100,
                  f"cameras.{name}.jpeg_quality : qualité JPEG attendue entre 1 et 100")
+
+    stereo = cfg["cameras"]["stereo"]
+    for side, example in (("left_device", "/dev/video0"), ("right_device", "/dev/video2")):
+        _require(isinstance(stereo[side], str) and stereo[side].strip() != "",
+                 f"cameras.stereo.{side} : chaîne non vide attendue (ex. {example})")
 
     pip = cfg["cameras"]["pip"]
     _require(isinstance(pip["enabled"], bool), "cameras.pip.enabled : booléen attendu")
@@ -337,8 +426,8 @@ def _validate(cfg: dict) -> None:
     cockpit = cfg["cockpit"]
     _require(cockpit["mode"] in ("solo", "duo", "pip"),
              "cockpit.mode : « solo », « duo » ou « pip » attendu")
-    _require(cockpit["source"] in ("cam1", "cam2"),
-             "cockpit.source : « cam1 » ou « cam2 » attendu")
+    _require(cockpit["source"] in ("cam1", "cam2", "cam3"),
+             "cockpit.source : « cam1 », « cam2 » ou « cam3 » attendu")
     for key, value in cockpit["overlay"].items():
         _require(isinstance(value, bool), f"cockpit.overlay.{key} : booléen attendu")
 
@@ -394,6 +483,10 @@ def _warn(cfg: dict) -> None:
         log.warning("serial.tx_hz=%.1f Hz : sous 2,5 Hz, le watchdog firmware (500 ms) déclenche le failsafe", tx_hz)
     elif tx_hz > 50:
         log.warning("serial.tx_hz=%.1f Hz : au-delà de 50 Hz, bande passante inutile (recommandé 20–50)", tx_hz)
+    stereo = cfg["cameras"]["stereo"]
+    if stereo["left_device"].strip() == stereo["right_device"].strip():
+        log.warning("cameras.stereo : gauche et droite sur le même périphérique (%s) — "
+                    "les deux fichiers 3D montreront la même scène", stereo["left_device"])
 
 
 # ---------------------------------------------------------------------------
@@ -422,7 +515,7 @@ class ConfigManager:
                     raise ConfigError(f"lecture de {self._path} impossible : {exc}") from exc
                 if not isinstance(raw, dict):
                     raise ConfigError(f"{self._path} : la racine doit être un objet JSON")
-            merged = _deep_merge(DEFAULTS, raw)
+            merged = _deep_merge(DEFAULTS, _migrate(raw))
             _validate(merged)
             if created or merged != raw:
                 self._write(merged)

@@ -64,6 +64,49 @@ def test_unknown_section_rejected(tmp_path):
         mgr.get_section("inconnue")
 
 
+# -- Réseau : priorité des liens et test de débit ---------------------------------
+
+def test_network_defaults_mode_and_speedtest(tmp_path):
+    cfg = ConfigManager(tmp_path / "config.json").load()
+    assert cfg["network"]["mode"] == "lan_first"
+    assert cfg["network"]["speedtest"] == {"duration_s": 8, "mbps_per_camera": 8}
+
+
+def test_network_mode_and_speedtest_validated(tmp_path):
+    mgr = ConfigManager(tmp_path / "config.json")
+    mgr.load()
+    mgr.update({"network": {"mode": "lan_only"}})
+    assert mgr.get()["network"]["mode"] == "lan_only"
+    for bad in ({"mode": "auto"},
+                {"speedtest": {"duration_s": 0}},
+                {"speedtest": {"duration_s": 31}},
+                {"speedtest": {"mbps_per_camera": 0}},
+                {"speedtest": {"mbps_per_camera": 500}}):
+        with pytest.raises(ConfigError):
+            mgr.update({"network": bad})
+    assert mgr.get()["network"]["mode"] == "lan_only"      # échecs sans écriture
+
+
+def test_network_legacy_wifi_enabled_migrated(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"network": {"wifi_enabled": False}}), encoding="utf-8")
+    cfg = ConfigManager(path).load()
+    assert cfg["network"]["mode"] == "lan_only"             # False ⇒ LAN uniquement
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert "wifi_enabled" not in written["network"]
+    assert written["network"]["mode"] == "lan_only"
+
+
+def test_network_legacy_speedtest_size_migrated_to_duration(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"network": {"speedtest": {"size_mb": 32}}}),
+                    encoding="utf-8")
+    cfg = ConfigManager(path).load()
+    assert cfg["network"]["speedtest"] == {"duration_s": 8, "mbps_per_camera": 8}
+    written = json.loads(path.read_text(encoding="utf-8"))
+    assert "size_mb" not in written["network"]["speedtest"]
+
+
 # -- Mise en page HUD (section CONFIG COCKPIT) -------------------------------------
 
 def test_hud_layout_defaults_present_and_valid(tmp_path):
@@ -152,7 +195,9 @@ def test_gamepad_defaults_include_poste_actions(tmp_path):
     actions = cfg["input"]["gamepad"]["actions"]
     assert [action["id"] for action in actions[:6]] == [
         "voie1", "voie2", "voie3", "voie4", "voie5", "voie6"]
-    for action_id in ("rec_view", "rec", "swap_cams", "toggle_toolbar", "head_tracker_engage"):
+    for action_id in ("rec_view", "rec", "rec_3d", "swap_cams", "toggle_toolbar", "fullscreen",
+                      "assist_rt", "assist_depth", "assist_cap", "assist_passif",
+                      "head_tracker_engage"):
         entry = next(action for action in actions if action["id"] == action_id)
         assert entry["source"] is None
         assert isinstance(entry["label"], str) and entry["label"]
@@ -222,3 +267,79 @@ def test_gamepad_sources_rejected(tmp_path):
         with pytest.raises(ConfigError):
             mgr.update({"input": {"gamepad": {"actions": [
                 {"id": "surge", "label": "Avance / recul", "sources": sources}]}}})
+
+
+# -- Enregistrement stéréo 3D (section CAMÉRAS → stéréo) --------------------------
+
+def test_stereo_defaults_present_and_valid(tmp_path):
+    cfg = ConfigManager(tmp_path / "config.json").load()
+    assert cfg["cameras"]["stereo"] == {"left_device": "/dev/video0",
+                                         "right_device": "/dev/video2"}
+    actions = cfg["input"]["gamepad"]["actions"]
+    entry = next(action for action in actions if action["id"] == "rec_3d")
+    assert entry["source"] is None
+    assert isinstance(entry["label"], str) and entry["label"]
+
+
+def test_stereo_migrated_from_existing_cameras(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text(json.dumps({"cameras": {"cam1": {"device": "/dev/video4"},
+                                             "cam2": {"device": "/dev/video6"}}}),
+                    encoding="utf-8")
+    cfg = ConfigManager(path).load()
+    assert cfg["cameras"]["stereo"] == {"left_device": "/dev/video4",
+                                         "right_device": "/dev/video6"}
+    # Choix indépendants : une valeur explicite n'est jamais écrasée au rechargement.
+    mgr = ConfigManager(path)
+    mgr.update({"cameras": {"stereo": {"left_device": "/dev/video1"}}})
+    reloaded = ConfigManager(path).load()
+    assert reloaded["cameras"]["stereo"] == {"left_device": "/dev/video1",
+                                              "right_device": "/dev/video6"}
+
+
+def test_stereo_devices_validated(tmp_path):
+    mgr = ConfigManager(tmp_path / "config.json")
+    mgr.load()
+    for bad in ({"left_device": ""}, {"left_device": "  "}, {"right_device": ""},
+                {"left_device": 3}, {"right_device": None}):
+        with pytest.raises(ConfigError):
+            mgr.update({"cameras": {"stereo": bad}})
+    assert mgr.get()["cameras"]["stereo"] == {"left_device": "/dev/video0",
+                                              "right_device": "/dev/video2"}
+
+
+def test_stereo_same_device_allowed_and_warned(tmp_path, caplog):
+    mgr = ConfigManager(tmp_path / "config.json")
+    mgr.load()
+    with caplog.at_level("WARNING", logger="bobrov.config"):
+        mgr.update({"cameras": {"stereo": {"left_device": "/dev/video5",
+                                             "right_device": "/dev/video5"}}})
+    assert mgr.get()["cameras"]["stereo"]["left_device"] == "/dev/video5"
+    assert any("même périphérique" in record.message for record in caplog.records)
+
+
+# -- Caméra 3 (vue Arrière) : assignation optionnelle ---------------------------
+
+def test_cam3_defaults_unassigned_and_valid(tmp_path):
+    """cam3 existe par défaut sans périphérique ; tout chemin fourni est validé."""
+    cfg = ConfigManager(tmp_path / "config.json").load()
+    assert cfg["cameras"]["cam3"]["device"] == ""
+    mgr = ConfigManager(tmp_path / "config.json")
+    mgr.load()
+    mgr.update({"cameras": {"cam3": {"device": "/dev/video4"}}})
+    assert mgr.get()["cameras"]["cam3"]["device"] == "/dev/video4"
+    mgr.update({"cameras": {"cam3": {"device": ""}}})
+    assert mgr.get()["cameras"]["cam3"]["device"] == ""
+    with pytest.raises(ConfigError):
+        mgr.update({"cameras": {"cam3": {"device": 3}}})
+    with pytest.raises(ConfigError):
+        mgr.update({"cameras": {"cam3": {"jpeg_quality": 0}}})
+
+
+def test_cockpit_source_accepts_cam3(tmp_path):
+    mgr = ConfigManager(tmp_path / "config.json")
+    mgr.load()
+    mgr.update({"cockpit": {"source": "cam3"}})
+    assert mgr.get()["cockpit"]["source"] == "cam3"
+    with pytest.raises(ConfigError):
+        mgr.update({"cockpit": {"source": "cam4"}})

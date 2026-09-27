@@ -118,16 +118,17 @@ def test_video_status_endpoint():
     assert response.status_code == 200
     data = response.json()
     assert data["status"] == "ok"
-    assert set(data["cameras"]) == {"cam1", "cam2"}
+    assert set(data["cameras"]) == {"cam1", "cam2", "cam3"}
     for cam in data["cameras"].values():
         assert cam["state"] in ("idle", "streaming", "error")
         assert isinstance(cam["clients"], int)
         assert cam["frames_total"] >= 0
+        assert isinstance(cam["configured"], bool)
 
 
 def test_video_unknown_camera_404():
     client = TestClient(app)
-    assert client.get("/api/video/cam3").status_code == 404
+    assert client.get("/api/video/cam4").status_code == 404
     assert client.get("/api/video/cam1x").status_code == 404
 
 
@@ -166,7 +167,7 @@ def test_video_frame_endpoint_returns_jpeg(monkeypatch):
 def test_video_frame_endpoint_404_unknown_camera(monkeypatch):
     _patch_sources(monkeypatch)
     client = TestClient(app)
-    assert client.get("/api/video/frame/cam3").status_code == 404
+    assert client.get("/api/video/frame/cam4").status_code == 404
 
 
 def test_video_frame_endpoint_503_without_frame(monkeypatch):

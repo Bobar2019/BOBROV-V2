@@ -651,6 +651,8 @@ output {
     z-index: 30;
 }
 .video-pane { position: absolute; inset: 0; background: #000; }
+/* Panneau sans rôle (le 3ᵉ flux au repos) : hors vue tant qu'il n'est pas choisi. */
+.video-pane.pane-idle { display: none; }
 .feed-img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .feed-tag {
     position: absolute;
@@ -1030,6 +1032,30 @@ output {
 }
 .rec-status[hidden] { display: none; }
 
+/* Case « 3D » de la barre d'outils : module le bouton REC (double capture
+   stéréo ffmpeg côté Pi). État actif : bordure et texte rouges, comme REC. */
+.rec-3d {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    align-self: center;
+    padding: 9px 12px;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    background: var(--panel-faint);
+    color: var(--text-secondary);
+    font-size: 0.74rem;
+    font-weight: 600;
+    letter-spacing: 1px;
+    cursor: pointer;
+    user-select: none;
+    transition: border-color 0.25s, color 0.25s, background 0.25s;
+}
+.rec-3d input { margin: 0; accent-color: var(--danger); }
+.rec-3d:hover { border-color: var(--danger); color: var(--text-primary); }
+.rec-3d.on { border-color: var(--danger); color: var(--danger); background: rgba(255, 59, 48, 0.12); }
+.rec-3d:has(input:disabled) { opacity: 0.45; cursor: not-allowed; }
+
 /* Indication d'enregistrement affichée dans le HUD (coin haut gauche de la scène,
    à droite du chip CAM qui garde sa place). La taille de police est recalée sur la
    hauteur de la scène par app.js, pour rester lisible en plein écran. Purement à
@@ -1100,6 +1126,48 @@ output {
 .kind-chip { flex: 0 0 auto; font-size: 0.6rem; letter-spacing: 1px; padding: 2px 8px; border-radius: 10px; border: 1px solid var(--border-subtle); color: var(--text-secondary); }
 .kind-chip.video { border-color: var(--accent-cyan); color: var(--accent-cyan); }
 .kind-chip.photo { border-color: var(--accent-purple); color: var(--accent-purple); }
+.kind-chip.web { border-color: var(--success); color: var(--success); }
+
+/* ===== APERÇUS WEB — badge « format brut », boutons de ligne, encart lecteur =====
+   Les captures 3D (MJPEG/mp4v) ne sont pas lues par les balises HTML5 : la ligne
+   propose la génération d'un proxy H.264 et le téléchargement direct pour VLC. */
+.raw-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.6rem;
+    letter-spacing: 0.5px;
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid var(--warning);
+    color: var(--warning);
+    white-space: nowrap;
+}
+.raw-badge.busy { border-color: var(--accent-cyan); color: var(--accent-cyan); }
+.raw-badge.fail { border-color: var(--danger); color: var(--danger); cursor: help; }
+.proxy-spin {
+    flex: none;
+    width: 11px;
+    height: 11px;
+    border: 2px solid color-mix(in srgb, var(--accent-cyan) 32%, transparent);
+    border-top-color: var(--accent-cyan);
+    border-radius: 50%;
+    animation: spin 0.9s linear infinite;
+}
+.media-actions { display: flex; align-items: center; gap: 6px; flex: none; flex-wrap: wrap; justify-content: flex-end; }
+.player-raw-hint {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 12px 14px;
+    border: 1px solid color-mix(in srgb, var(--warning) 45%, transparent);
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--warning) 7%, transparent);
+}
+.player-raw-hint[hidden] { display: none; }
+.player-raw-hint .hint { margin: 0; }
 
 /* ===== RENOMMAGE — édition du nom en place dans la liste des médias ===== */
 .rename-line { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1 1 auto; }
@@ -1117,51 +1185,65 @@ output {
 .rename-ext { font-size: 0.72rem; color: var(--text-dim); }
 .rename-line .ok { border-color: var(--success); color: var(--success); }
 
-/* ===== MANETTE — tableau des fonctions (une colonne par manette) ===== */
-.pad-fn-table { display: flex; flex-direction: column; gap: 6px; margin-bottom: 10px; }
-.pad-fn-head,
-.pad-fn-row {
-    display: grid;
-    grid-template-columns: minmax(190px, 1.4fr) repeat(var(--pad-cols, 2), minmax(150px, 1fr));
-    gap: 8px;
-    align-items: center;
-}
-.pad-fn-head {
-    padding: 0 12px 4px;
-    font-size: 0.7rem;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-dim);
-}
-.pad-fn-col.offline { color: var(--warning); }
+/* ===== MANETTE — fonctions assignables (une ligne par fonction) ===== */
+.pad-fn-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
 .pad-fn-group {
-    margin-top: 8px;
+    margin-top: 12px;
+    padding-bottom: 4px;
+    border-bottom: 1px solid var(--divider);
     font-size: 0.72rem;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: var(--accent-cyan);
 }
-.pad-fn-row {
-    padding: 8px 12px;
+.pad-fn-group:first-child { margin-top: 0; }
+.pad-fn-item {
+    display: grid;
+    grid-template-columns: minmax(210px, 1fr) minmax(0, 1.5fr) auto;
+    gap: 6px 16px;
+    align-items: center;
+    padding: 9px 12px;
     background: var(--bg-input);
     border: 1px solid var(--border-subtle);
     border-radius: var(--radius-sm);
     font-size: 0.78rem;
 }
-.pad-fn-name { display: flex; flex-direction: column; gap: 2px; color: var(--text-primary); }
+.pad-fn-item.capturing {
+    border-color: var(--warning);
+    background: color-mix(in srgb, var(--warning) 7%, var(--bg-input));
+}
+.pad-fn-info { display: flex; flex-direction: column; gap: 2px; color: var(--text-primary); }
+.pad-fn-name { font-size: 0.8rem; }
 .pad-fn-note { font-style: normal; font-size: 0.68rem; color: var(--text-dim); }
-.pad-fn-cell { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.pad-fn-badge {
-    padding: 3px 9px;
+.pad-fn-links { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.pad-fn-empty { font-size: 0.7rem; color: var(--text-dim); font-style: italic; }
+.pad-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 5px 3px 10px;
+    border: 1px solid var(--border-color);
     border-radius: 999px;
-    border: 1px solid var(--accent-cyan);
     background: var(--panel-faint);
-    color: var(--accent-cyan);
     font-size: 0.7rem;
     white-space: nowrap;
 }
-.pad-fn-cell.capturing { outline: 1px dashed var(--warning); outline-offset: 3px; border-radius: 6px; }
+.pad-link b { font-weight: 600; color: var(--accent-cyan); }
+.pad-link .pad-link-ctl { color: var(--text-secondary); }
+.pad-link-x {
+    border: 0;
+    background: none;
+    padding: 0 4px;
+    cursor: pointer;
+    color: var(--text-dim);
+    font-size: 0.72rem;
+    line-height: 1;
+}
+.pad-link-x:hover { color: var(--danger); }
+.pad-link.head { border-color: var(--accent-purple); }
+.pad-link.head b { color: var(--accent-purple); }
+.pad-fn-actions { display: flex; align-items: center; gap: 6px; justify-content: flex-end; flex-wrap: wrap; }
 .pad-capture-hint {
     margin: 4px 0 8px;
     padding: 8px 10px;
@@ -1170,7 +1252,8 @@ output {
     color: var(--warning);
 }
 @media (max-width: 860px) {
-    .pad-fn-head, .pad-fn-row { grid-template-columns: 1fr; }
+    .pad-fn-item { grid-template-columns: 1fr; }
+    .pad-fn-actions { justify-content: flex-start; }
 }
 .btn-mini {
     padding: 5px 12px;
@@ -1184,6 +1267,45 @@ output {
 }
 .btn-mini:hover { border-color: var(--accent-cyan); color: var(--accent-cyan); }
 .btn-mini.warn { border-color: var(--warning); color: var(--warning); }
+.btn-mini.assign { border-color: var(--accent-cyan); color: var(--accent-cyan); }
+.btn-mini.assign:hover { background: color-mix(in srgb, var(--accent-cyan) 14%, transparent); }
+.btn-mini.head { border-color: var(--accent-purple); color: var(--accent-purple); }
+.btn-mini.head:hover { background: color-mix(in srgb, var(--accent-purple) 14%, transparent); }
+.btn-mini.capturing { border-color: var(--warning); color: var(--warning); }
+.btn-mini.capturing:hover { background: color-mix(in srgb, var(--warning) 14%, transparent); }
+
+/* ===== MANETTE — aperçu des assignations (commandes libres / prises) ===== */
+.pad-glance { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 14px; margin: 10px 0; }
+.pad-glance-panel {
+    padding: 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--panel-faint);
+}
+.pad-glance-panel h4 {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    margin: 0 0 10px;
+    font-size: 0.78rem;
+    color: var(--text-primary);
+}
+.pad-glance-canvas {
+    display: block;
+    width: 100%;
+    height: auto;
+    background: rgba(3, 9, 13, 0.55);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+}
+#pad-glance-ps { aspect-ratio: 320 / 220; }
+#pad-glance-rov { aspect-ratio: 320 / 140; }
+.pad-glance-count { margin: 8px 0 0; font-size: 0.7rem; color: var(--text-secondary); }
+.pad-glance-legend { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.pad-glance-swatch { display: inline-block; width: 10px; height: 10px; border-radius: 50%; }
+.pad-glance-swatch.used { background: #f4657e; box-shadow: 0 0 6px color-mix(in srgb, #f4657e 65%, transparent); }
+.pad-glance-swatch.free { background: #2ee6a8; box-shadow: 0 0 6px color-mix(in srgb, #2ee6a8 65%, transparent); }
 
 /* ===== MANETTE — test en direct (vue PlayStation + vue ROV) ===== */
 .pad-test-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -1262,6 +1384,103 @@ output {
 .wifi-sig { color: var(--accent-cyan); font-size: 0.72rem; }
 .device-item .dev-actions { display: flex; gap: 8px; margin-left: auto; }
 .wifi-pass-input { width: 150px !important; }
+
+/* ===== RÉSEAU — priorité des liens et test de débit ===== */
+.net-mode-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+}
+.net-mode-option {
+    display: block;
+    text-align: left;
+    padding: 10px 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--panel-faint);
+    color: var(--text-secondary);
+    cursor: pointer;
+    font: inherit;
+    transition: border-color 0.12s, background 0.12s;
+}
+.net-mode-option:hover { border-color: var(--accent-cyan); }
+.net-mode-option strong { display: block; color: var(--text-primary); font-size: 0.8rem; margin-bottom: 4px; }
+.net-mode-option span { font-size: 0.68rem; color: var(--text-dim); line-height: 1.4; }
+.net-mode-option.active {
+    border-color: var(--accent-cyan);
+    background: rgba(0, 217, 255, 0.1);
+    box-shadow: inset 0 0 0 1px var(--accent-cyan);
+}
+.net-mode-option.active strong { color: var(--accent-cyan); }
+
+/* -- Test de vitesse (jauge type speedtest) et connexion web ---------------- */
+.speedtest { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.speed-gauge { position: relative; width: min(320px, 78vw); }
+.speed-gauge svg { display: block; width: 100%; height: auto; }
+.gauge-arc { fill: none; stroke: var(--track-bg); stroke-width: 10; stroke-linecap: round; }
+.gauge-tick { stroke: var(--border-subtle); stroke-width: 2; }
+.gauge-label { fill: var(--text-dim); font-size: 11px; text-anchor: middle; dominant-baseline: middle; }
+.gauge-needle {
+    stroke: var(--accent-cyan);
+    stroke-width: 4;
+    stroke-linecap: round;
+    transform-origin: 130px 150px;
+    transition: transform 0.35s cubic-bezier(0.3, 0.8, 0.4, 1);
+}
+.gauge-hub { fill: var(--accent-cyan); }
+.speed-gauge-read {
+    position: absolute;
+    left: 50%;
+    top: 56%;
+    transform: translate(-50%, -50%);
+    text-align: center;
+    pointer-events: none;
+}
+.speed-gauge-read strong {
+    display: block;
+    font-size: 2.1rem;
+    line-height: 1.05;
+    color: var(--accent-cyan);
+    font-variant-numeric: tabular-nums;
+}
+.speed-gauge-read span { font-size: 0.7rem; color: var(--text-dim); }
+.speed-phase { font-size: 0.8rem; color: var(--text-dim); margin: 0; text-align: center; }
+.speed-results { width: 100%; }
+.speed-tiles {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+    gap: 8px;
+    margin: 10px 0 8px;
+}
+.speed-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 8px 10px;
+    background: var(--panel-faint);
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+}
+.speed-tile-label {
+    font-size: 0.64rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-dim);
+}
+.speed-tile-value { font-size: 1.3rem; line-height: 1.15; font-variant-numeric: tabular-nums; }
+.speed-tile-unit { font-size: 0.7rem; font-weight: 400; color: var(--text-dim); }
+.speed-tile-sub { font-size: 0.66rem; color: var(--text-dim); }
+.speed-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin: 10px 0 6px; }
+.speed-value { font-size: 1.1rem; }
+.speed-value.ok { color: var(--success); }
+.speed-value.warn { color: var(--warning); }
+.speed-value.err { color: var(--danger); }
+.speed-scale { font-size: 0.64rem; color: var(--text-dim); margin: 5px 0 4px; }
+.speed-verdict { font-size: 0.78rem; margin: 4px 0 0; }
+.speed-verdict.ok { color: var(--success); }
+.speed-verdict.warn { color: var(--warning); }
+.speed-verdict.err { color: var(--danger); }
 
 /* Photo dans le lecteur */
 #player-photo {
@@ -1376,6 +1595,89 @@ output {
     from { opacity: 0; transform: translateY(10px); }
     to   { opacity: 1; transform: none; }
 }
+
+/* ===== ALIGNEMENT 3D (réglage mécanique du binôme stéréo) ===== */
+.align-toolbar { margin-bottom: 10px; }
+.align-stage {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    aspect-ratio: 16 / 9;
+    max-height: 68vh;
+    background: #000;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    overflow: hidden;
+}
+/* Le canvas garde son ratio intrinsèque (dimensions du flux gauche) : contain. */
+.align-stage canvas {
+    display: block;
+    width: auto;
+    height: auto;
+    max-width: 100%;
+    max-height: 100%;
+}
+.align-wait {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0 16px;
+    text-align: center;
+    color: rgba(214, 242, 250, 0.85);
+    font-family: var(--font-body);
+    font-size: 0.78rem;
+    pointer-events: none;
+}
+.align-wait[hidden] { display: none; }
+.align-steps { display: grid; gap: 10px; margin: 0; padding-left: 22px; }
+.align-steps h4 { margin: 0 0 2px; color: var(--accent-cyan); font-size: 0.86rem; letter-spacing: 0.04em; }
+.align-steps p { margin: 0; color: var(--text-secondary); font-size: 0.82rem; line-height: 1.45; }
+.align-figure { margin: 4px 0 0; display: grid; gap: 8px; }
+.align-figure svg {
+    width: 100%;
+    height: auto;
+    border: 1px solid var(--border-subtle);
+    border-radius: var(--radius-sm);
+    background: var(--bg-input);
+}
+.align-figure figcaption { color: var(--text-dim); font-size: 0.76rem; line-height: 1.4; }
+
+/* ===== MODALE (guides et aides des Paramètres) ===== */
+.modal-backdrop {
+    position: fixed;
+    inset: 0;
+    z-index: 420;                       /* au-dessus du lecteur, sous les toasts */
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+    background: var(--overlay-bg);
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+}
+.modal-backdrop[hidden] { display: none; }
+.modal-card {
+    width: min(680px, 100%);
+    max-height: 86vh;
+    overflow-y: auto;
+    padding: 18px 20px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+}
+.modal-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 8px;
+}
+.modal-head h3 { margin: 0; }
+.modal-body { display: grid; gap: 10px; }
 
 /* ===== RESPONSIVE (deux points de rupture) ===== */
 @media (max-width: 768px) {

@@ -16,9 +16,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Response
 from fastapi.staticfiles import StaticFiles
 
-from app import __version__, network, video, videos
+from app import __version__, network, stereo, video, videos
 from app.config import PROJECT_ROOT, get_config
-from app.routers import api_config, api_sim_assets, api_system
+from app.routers import api_config, api_rov, api_sim_assets, api_system
 from app.serial_link import get_serial_link
 
 logging.basicConfig(
@@ -35,6 +35,7 @@ async def lifespan(_app: FastAPI):
     data = get_config().load()
     _app.state.started_at = time.time()
     log.info("BOBROV %s — démarrage du socle", __version__)
+    videos.get_library().purge_partials()       # conversions/dépôts avortés par un arrêt brutal
     log.info("Interface HTTP : http://%s:%s (host/port lus dans config.json)",
              data["network"]["host"], data["network"]["port"])
     log.info("Liaison série : %s @ %d bauds — démarrage du service",
@@ -43,11 +44,17 @@ async def lifespan(_app: FastAPI):
     video.get_video().start()
     log.info("Flux vidéo : cam1=%s · cam2=%s — superviseurs prêts (capture à la demande)",
              data["cameras"]["cam1"]["device"], data["cameras"]["cam2"]["device"])
-    # Préférence « rester en LAN uniquement » : appliquée en tâche de fond pour
-    # ne pas retarder le démarrage (nmcli peut mettre 1–2 s).
-    threading.Thread(target=network.enforce_lan_preference,
-                     name="wifi-lan-preference", daemon=True).start()
+    log.info("Enregistrement 3D : ffmpeg %s — gauche=%s · droite=%s (capture à la demande)",
+             "détecté" if stereo.ffmpeg_available() else "ABSENT (fonction 3D indisponible)",
+             data["cameras"]["stereo"]["left_device"], data["cameras"]["stereo"]["right_device"])
+    # Tâches réseau du démarrage — priorité des liens (LAN/WiFi) et redirection
+    # du port 80 pour http://<nom>.local — en tâche de fond pour ne pas
+    # retarder le démarrage (nmcli + sudo peuvent prendre 1–2 s).
+    threading.Thread(target=network.startup,
+                     name="network-startup", daemon=True).start()
     yield
+    stereo.get_stereo().shutdown()
+    videos.get_proxy_jobs().shutdown()
     video.get_video().stop()
     get_serial_link().stop()
     log.info("BOBROV — arrêt propre")
@@ -74,8 +81,10 @@ app = FastAPI(title="BOBROV", version=__version__, lifespan=lifespan)
 app.include_router(api_system.router)
 app.include_router(api_config.router)
 app.include_router(api_sim_assets.router)
+app.include_router(api_rov.router)
 app.include_router(video.router)
 app.include_router(videos.router)
+app.include_router(stereo.router)
 app.include_router(network.router)
 
 # SPA servie depuis static/ (index.html + style.css + app.js).

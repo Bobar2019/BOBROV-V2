@@ -99,6 +99,10 @@
                 <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
                 <span>Caméras</span>
             </a>
+            <a class="nav-tile" data-tile-id="align3d" data-target="section-align3d" href="#section-align3d">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="7"></circle><circle cx="12" cy="12" r="1.6"></circle><line x1="12" y1="2" x2="12" y2="5"></line><line x1="12" y1="19" x2="12" y2="22"></line><line x1="2" y1="12" x2="5" y2="12"></line><line x1="19" y1="12" x2="22" y2="12"></line></svg>
+                <span>Alignement 3D</span>
+            </a>
             <a class="nav-tile" data-tile-id="network" data-target="section-network" href="#section-network">
                 <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="10"></circle><line x1="2" y1="12" x2="22" y2="12"></line><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
                 <span>Réseau</span>
@@ -144,12 +148,27 @@
                 <button type="button" data-mode="pip" class="seg-btn active">PIP</button>
             </div>
             <div class="segmented" id="video-source" role="group" aria-label="Source principale">
-                <button type="button" data-src="cam1" class="seg-btn active">Source : Cam 1</button>
-                <button type="button" data-src="cam2" class="seg-btn">Source : Cam 2</button>
+                <button type="button" data-src="cam1" class="seg-btn active" title="Caméra Gauche (Avant G) — flux de référence de la vue Avant">Avant G</button>
+                <button type="button" data-src="cam2" class="seg-btn" title="Caméra Droite (Avant D)">Avant D</button>
+                <button type="button" data-src="cam3" class="seg-btn" title="Caméra Arrière (assignez son périphérique dans Paramètres → Caméras)">Arrière</button>
+            </div>
+            <!-- Type d'autopilot du firmware BOB-CONTROL : masque d'assistances
+                 superposables (0 = passif), appliqué par l'ESP32-S3 sur trames
+                 armées (PROTOCOLE_RPI5.md §4 et §6.2). -->
+            <div class="segmented" id="rov-autopilot" role="group" aria-label="Type d'autopilot">
+                <button type="button" data-assist="rt" class="seg-btn" title="Stabiliser le roulis / tangage — boucle PID (auto R/T)">Stabiliser</button>
+                <button type="button" data-assist="depth" class="seg-btn" title="Tenir la profondeur — consigne capturée à l'activation">Profondeur</button>
+                <button type="button" data-assist="cap" class="seg-btn" title="Tenir le cap — consigne capturée à l'activation">Cap</button>
+                <button type="button" data-assist="surface" class="seg-btn" title="Retour surface — prioritaire, force la remontée M5-M8">Surface</button>
+                <button type="button" data-assist="passif" class="seg-btn" title="Autopilote passif — couper toutes les assistances">Passif</button>
             </div>
             <button id="btn-video-swap" class="btn btn-ghost" type="button" title="Échanger la caméra principale et l'incrustation PIP : celle en principal passe en PIP et inversement">Permuter</button>
             <div class="toolbar-btns">
-                <button id="btn-video-rec" class="btn btn-rec" type="button" title="Enregistrer la vidéo du flux affiché (fichier .webm dans Mes Vidéos)">
+                <label class="rec-3d" id="rec-3d-toggle" title="Enregistrer en stéréo 3D : capture simultanée des caméras Gauche et Droite (Paramètres → Caméras) dans deux fichiers MP4, sans ré-encodage">
+                    <input type="checkbox" id="chk-rec-3d">
+                    <span>3D</span>
+                </label>
+                <button id="btn-video-rec" class="btn btn-rec" type="button" title="Enregistrer la vidéo du flux affiché (fichier .webm dans Mes Vidéos) ; case « 3D » cochée : double capture stéréo camG/camD">
                     <span class="rec-dot" aria-hidden="true"></span><span id="btn-video-rec-label">REC</span>
                 </button>
                 <button id="btn-video-recview" class="btn btn-rec" type="button" title="Enregistrer la caméra principale avec le HUD télémétrie, sans PIP (fichier .webm dans Mes Vidéos)">
@@ -199,24 +218,35 @@
 
         <div id="video-stage" class="video-stage mode-pip pip-on pip-bottom-right">
             <div class="video-pane pane-main" id="pane-cam1">
-                <span class="feed-tag">CAM 1</span>
-                <img id="feed-cam1" class="feed-img" alt="Flux caméra 1">
+                <span class="feed-tag">AVANT G</span>
+                <img id="feed-cam1" class="feed-img" alt="Flux caméra gauche (Avant G)">
                 <div class="feed-overlay" id="overlay-cam1" hidden>
                     <div class="feed-overlay-inner">
                         <div class="feed-spinner"></div>
                         <p class="feed-title">PAS DE SIGNAL</p>
-                        <p class="feed-detail" id="detail-cam1">Caméra 1 — en attente du flux…</p>
+                        <p class="feed-detail" id="detail-cam1">Caméra gauche — en attente du flux…</p>
                     </div>
                 </div>
             </div>
             <div class="video-pane pane-pip" id="pane-cam2">
-                <span class="feed-tag">CAM 2</span>
-                <img id="feed-cam2" class="feed-img" alt="Flux caméra 2">
+                <span class="feed-tag">AVANT D</span>
+                <img id="feed-cam2" class="feed-img" alt="Flux caméra droite (Avant D)">
                 <div class="feed-overlay" id="overlay-cam2" hidden>
                     <div class="feed-overlay-inner">
                         <div class="feed-spinner"></div>
                         <p class="feed-title">PAS DE SIGNAL</p>
-                        <p class="feed-detail" id="detail-cam2">Caméra 2 — en attente du flux…</p>
+                        <p class="feed-detail" id="detail-cam2">Caméra droite — en attente du flux…</p>
+                    </div>
+                </div>
+            </div>
+            <div class="video-pane pane-idle" id="pane-cam3">
+                <span class="feed-tag">ARRIÈRE</span>
+                <img id="feed-cam3" class="feed-img" alt="Flux caméra arrière">
+                <div class="feed-overlay" id="overlay-cam3" hidden>
+                    <div class="feed-overlay-inner">
+                        <div class="feed-spinner"></div>
+                        <p class="feed-title">PAS DE SIGNAL</p>
+                        <p class="feed-detail" id="detail-cam3">Caméra arrière — en attente du flux…</p>
                     </div>
                 </div>
             </div>
@@ -297,8 +327,9 @@
         </div><!-- /video-view -->
 
         <div class="video-info-bar">
-            <span class="info-chip" id="vinfo-cam1">Cam 1 : —</span>
-            <span class="info-chip" id="vinfo-cam2">Cam 2 : —</span>
+            <span class="info-chip" id="vinfo-cam1">Avant G : —</span>
+            <span class="info-chip" id="vinfo-cam2">Avant D : —</span>
+            <span class="info-chip" id="vinfo-cam3">Arrière : —</span>
             <span class="info-chip" id="vinfo-mode">Mode : PIP</span>
             <span class="info-chip" id="vinfo-telemetry">Télémétrie : —</span>
         </div>
@@ -376,6 +407,16 @@
                     <button id="btn-player-close" class="btn btn-ghost" type="button">Fermer</button>
                 </div>
             </div>
+            <div class="player-raw-hint" id="player-raw-hint" hidden>
+                <span class="raw-badge" id="player-raw-badge">Format brut — Aperçu web à générer</span>
+                <p class="hint">Ce fichier (MJPEG, tag mp4v) n'est pas décodé par les navigateurs.
+                Générez un aperçu web H.264 pour le visionner ici, ou téléchargez le fichier brut
+                pour VLC — le montage 3D. Le fichier original n'est jamais modifié.</p>
+                <div class="toolbar-btns">
+                    <button id="btn-player-gen-proxy" class="btn btn-primary" type="button">Générer l'aperçu web</button>
+                    <button id="btn-player-vlc" class="btn btn-ghost" type="button">Télécharger (VLC)</button>
+                </div>
+            </div>
             <video id="player-video" controls playsinline preload="metadata"></video>
             <img id="player-photo" alt="Photo enregistrée" hidden>
             <div class="player-meta">
@@ -399,11 +440,12 @@
     <!-- ===== SECTION CAMÉRAS ===== -->
     <section id="section-cameras" class="section-panel page-container" style="display:none">
         <h2>Caméras</h2>
-        <p class="page-sub">Périphériques V4L2, résolution et cadence de chaque flux MJPEG, et
-        réglages d'enregistrement utilisés par le Cockpit.</p>
+        <p class="page-sub">Trois rôles pour le poste : Caméra Gauche (Avant G), Caméra Droite (Avant D) et
+        Caméra Arrière. Scanner des périphériques V4L2 (/dev/video*), résolution et cadence de chaque flux
+        MJPEG, et réglages d'enregistrement utilisés par le Cockpit.</p>
 
         <div class="card cam-card">
-            <h3>Cam 1 <span class="cam-live" id="cam1-live"></span></h3>
+            <h3>Caméra Gauche — Avant G <span class="cam-live" id="cam1-live"></span></h3>
             <div class="settings-grid">
                 <label>Périphérique
                     <select id="cam1-device"></select>
@@ -422,7 +464,7 @@
         </div>
 
         <div class="card cam-card">
-            <h3>Cam 2 <span class="cam-live" id="cam2-live"></span></h3>
+            <h3>Caméra Droite — Avant D <span class="cam-live" id="cam2-live"></span></h3>
             <div class="settings-grid">
                 <label>Périphérique
                     <select id="cam2-device"></select>
@@ -438,6 +480,47 @@
                 </label>
             </div>
             <p class="hint" id="cam2-dev-info">—</p>
+        </div>
+
+        <div class="card cam-card">
+            <h3>Caméra Arrière <span class="cam-live" id="cam3-live"></span></h3>
+            <div class="settings-grid">
+                <label>Périphérique
+                    <select id="cam3-device"></select>
+                </label>
+                <label>Résolution
+                    <select id="cam3-resolution"></select>
+                </label>
+                <label>Cadence
+                    <select id="cam3-fps"></select>
+                </label>
+                <label>Qualité JPEG <output id="cam3-quality-val">75</output>
+                    <input type="range" id="cam3-quality" min="1" max="100" step="1" value="75">
+                </label>
+            </div>
+            <p class="hint" id="cam3-dev-info">—</p>
+        </div>
+
+        <div class="card">
+            <h3>Stéréo 3D</h3>
+            <p class="hint">Enregistrement simultané des deux yeux en copie MJPEG (sans ré-encodage) : la case
+            « 3D » du Cockpit déclenche la capture via le bouton REC. Chaque paire produit
+            AAAAMMJJ_HHMMSS_camG.mp4 et AAAAMMJJ_HHMMSS_camD.mp4 dans Mes Vidéos — lecture recommandée avec
+            VLC (le lecteur de la page ne décode pas le MJPEG dans un conteneur MP4). Par défaut, le binôme
+            suit les caméras Gauche et Droite ci-dessus (Avant G + Avant D) ; l'aperçu superposé se règle
+            dans Paramètres → Alignement 3D.</p>
+            <div class="settings-grid">
+                <label>Caméra Gauche (Avant G)
+                    <select id="stereo-left-device"></select>
+                </label>
+                <label>Caméra Droite (Avant D)
+                    <select id="stereo-right-device"></select>
+                </label>
+            </div>
+            <p class="hint" id="stereo-dev-info">—</p>
+            <div class="row-end">
+                <button id="btn-stereo-save" class="btn btn-success" type="button">Enregistrer le réglage 3D</button>
+            </div>
         </div>
 
         <div class="card">
@@ -477,33 +560,173 @@
         </div>
     </section>
 
+    <!-- ===== SECTION ALIGNEMENT 3D (réglage mécanique du binôme stéréo) ===== -->
+    <section id="section-align3d" class="section-panel page-container" style="display:none">
+        <h2>Alignement 3D</h2>
+        <p class="page-sub">Réglage mécanique du binôme stéréo : la Caméra Gauche (Avant G) et la Caméra
+        Droite (Avant D) sont superposées à 50 %/50 % sous une mire de guidage. Ajustez les supports
+        jusqu'à ce que les deux images coïncident parfaitement sur les repères.</p>
+
+        <div class="card">
+            <div class="row-end align-toolbar">
+                <button id="btn-align-help" class="btn btn-ghost" type="button"
+                        title="Ouvrir le guide de réglage : horizon (roulis), hauteur (tangage), convergence (lacet)">
+                    ? Guide de réglage
+                </button>
+            </div>
+            <div class="align-stage" id="align-stage">
+                <canvas id="align-canvas" width="1280" height="720"
+                        aria-label="Superposition des flux Gauche et Droite avec mire de guidage"></canvas>
+                <div class="align-wait" id="align-wait">Connexion aux flux du binôme…</div>
+            </div>
+            <p class="hint" id="align-info">—</p>
+        </div>
+
+        <!-- Modale : guide de réglage mécanique (bouton « ? Guide de réglage ») -->
+        <div id="align-help" class="modal-backdrop" hidden>
+            <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="align-help-title">
+                <div class="modal-head">
+                    <h3 id="align-help-title">Guide de réglage mécanique du binôme</h3>
+                    <button id="btn-align-help-close" class="btn btn-ghost" type="button">Fermer</button>
+                </div>
+                <div class="modal-body">
+                    <p class="hint">Les deux flux doivent se superposer exactement sur la mire du canvas :
+                    tant que les repères « dédoublent », les capteurs ne sont pas alignés.</p>
+                    <ol class="align-steps">
+                        <li>
+                            <h4>Horizon (Roulis)</h4>
+                            <p>Aligner les deux capteurs sur la ligne horizontale : les horizons des deux
+                            images doivent se confondre avec les repères horizontaux de la mire. Un roulis
+                            résiduel fait « croiser » les deux horizons en ciseaux.</p>
+                        </li>
+                        <li>
+                            <h4>Hauteur (Tangage)</h4>
+                            <p>Annuler strictement tout décalage vertical entre les deux images : un objet
+                            droit situé dans l'axe doit occuper la même hauteur dans les deux flux.
+                            Corrigez par la hauteur des supports, jamais par la visée seule.</p>
+                        </li>
+                        <li>
+                            <h4>Convergence (Lacet)</h4>
+                            <p>Régler les axes parallèles — ou convergents à 2–3 m si votre montage le
+                            demande — mais identiquement des deux côtés : les deux capteurs ne doivent jamais
+                            diverger. Contrôlez de près puis à quelques mètres.</p>
+                        </li>
+                    </ol>
+                    <figure class="align-figure">
+                        <svg viewBox="0 0 640 250" role="img"
+                             aria-label="Schéma de superposition : à gauche les deux flux coïncident, à droite ils se dédoublent">
+                            <!-- Bon alignement : horizon et sujet confondus -->
+                            <rect x="10" y="12" width="290" height="184" rx="10" fill="#0d1117" stroke="#39404f" stroke-width="2"></rect>
+                            <path d="M34 132 L120 132 L150 100 L196 132 L276 132" fill="none" stroke="#00d9ff" stroke-width="3" stroke-linejoin="round"></path>
+                            <path d="M132 152 q20 -26 40 0 z" fill="#00d9ff" opacity="0.55"></path>
+                            <text x="155" y="232" text-anchor="middle" fill="#00e676" font-size="15" font-family="monospace">✓ Aligné</text>
+                            <!-- Mauvais alignement : roulis + décalage vertical (flux dédoublés) -->
+                            <rect x="340" y="12" width="290" height="184" rx="10" fill="#0d1117" stroke="#39404f" stroke-width="2"></rect>
+                            <path d="M364 126 L450 126 L480 96 L526 126 L606 126" fill="none" stroke="#00d9ff" stroke-width="3" stroke-linejoin="round" transform="rotate(2.6 485 120)"></path>
+                            <path d="M364 138 L450 138 L480 108 L526 138 L606 138" fill="none" stroke="#ff3e9d" stroke-width="3" stroke-linejoin="round" transform="rotate(-2.2 485 128)"></path>
+                            <path d="M460 160 q20 -26 40 0 z" fill="#00d9ff" opacity="0.55"></path>
+                            <path d="M466 172 q20 -26 40 0 z" fill="#ff3e9d" opacity="0.55"></path>
+                            <text x="485" y="232" text-anchor="middle" fill="#ff5b57" font-size="15" font-family="monospace">✗ Désaligné</text>
+                        </svg>
+                        <figcaption>Repères cyan : flux Gauche ; magenta : flux Droite. Alignés, ils se
+                        confondent (à gauche) ; roulis ou décalage vertical les font « dédoubler » (à droite).
+                        Le canvas de cette page montre la même superposition en direct.</figcaption>
+                    </figure>
+                </div>
+            </div>
+        </div>
+    </section>
+
     <!-- ===== SECTION RÉSEAU ===== -->
     <section id="section-network" class="section-panel page-container" style="display:none">
         <h2>Réseau</h2>
-        <p class="page-sub">Accès au cockpit, état des interfaces et gestion WiFi (scan + connexion)
-        via NetworkManager — ou rester en filaire (LAN) uniquement.</p>
+        <p class="page-sub">Accès au cockpit, priorité LAN / WiFi, nom du Pi (.local) et débit vidéo —
+        tout se règle d'ici.</p>
 
         <div class="card">
-            <h3>WiFi</h3>
-            <p class="hint" id="wifi-state">—</p>
-            <div id="net-devices" class="device-list"></div>
-            <div class="row-end">
-                <button id="btn-wifi-scan" class="btn btn-primary" type="button">Scanner les réseaux</button>
-                <button id="btn-lan-only" class="btn btn-ghost" type="button">Rester en LAN uniquement</button>
-            </div>
-            <p class="hint">« Rester en LAN uniquement » déconnecte le WiFi et mémorise la préférence :
-            elle sera réappliquée au démarrage du service. Le WiFi reste activable à tout moment d'ici.</p>
+            <h3>Accès au cockpit</h3>
+            <p class="hint" id="net-link-state">Lecture de l'état réseau…</p>
+            <div id="net-access-list" class="device-list"></div>
+            <p class="hint">Ouvrez l'adresse web sur le poste de pilotage ; la commande SSH sert au
+            terminal. L'adresse <code>.local</code> fonctionne sur les appareils compatibles mDNS
+            (macOS, Linux, Windows 10+).</p>
         </div>
 
         <div class="card">
-            <h3>Réseaux détectés</h3>
+            <h3>Priorité des liens</h3>
+            <p class="hint" id="net-mode-state">—</p>
+            <div id="net-mode-grid" class="net-mode-grid"></div>
+            <div id="net-devices" class="device-list"></div>
+            <p class="hint">La préférence est enregistrée dans config.json et réappliquée à chaque
+            démarrage du Pi. « LAN uniquement » déconnecte le WiFi (relançable ici) ;
+            « WiFi uniquement » débranche logiquement l'Ethernet.</p>
+        </div>
+
+        <div class="card">
+            <h3>Réseaux WiFi</h3>
+            <p class="hint" id="wifi-state">—</p>
+            <div class="row-end">
+                <button id="btn-wifi-scan" class="btn btn-primary" type="button">Scanner les réseaux</button>
+            </div>
             <div id="wifi-list" class="device-list">
                 <p class="hint">Touchez « Scanner les réseaux » pour lancer une recherche.</p>
             </div>
         </div>
 
         <div class="card">
-            <h3>Accès au cockpit</h3>
+            <h3>Nom du Pi (.local)</h3>
+            <p class="hint" id="mdns-state">—</p>
+            <div class="settings-grid">
+                <label>Adresse mDNS
+                    <input type="text" id="net-mdns-name" placeholder="bob" autocomplete="off" spellcheck="false">
+                </label>
+            </div>
+            <p class="hint">Le Pi répond ensuite à <code>http://&lt;nom&gt;.local</code> sur ce réseau
+            (sans « :8080 » — le port 80 est redirigé vers le cockpit au démarrage du service) —
+            minuscules, chiffres et tirets (63 caractères maximum). Le renommage est définitif
+            (hostname système + republication Avahi) ; l'adresse IP ne change pas.</p>
+            <div class="row-end">
+                <button id="btn-mdns-save" class="btn btn-success" type="button">Renommer le Pi</button>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Test de vitesse</h3>
+            <p class="hint">Mesure la liaison entre ce navigateur et le Pi — ping, descente puis montée —
+            comme un speedtest, par phases d'environ 8 s (le volume échangé s'adapte à la vitesse
+            du lien). C'est elle qui fixe la fluidité vidéo : à refaire sur chaque appareil de
+            pilotage, idéalement flux vidéo coupés.</p>
+            <div class="speedtest">
+                <div class="speed-gauge" id="speed-gauge">
+                    <svg viewBox="0 0 260 200" aria-hidden="true"></svg>
+                    <div class="speed-gauge-read">
+                        <strong id="speedtest-live">0</strong>
+                        <span>Mbit/s</span>
+                    </div>
+                </div>
+                <p class="speed-phase" id="speedtest-phase">Prêt à tester.</p>
+                <button id="btn-speedtest" class="btn btn-primary" type="button">Lancer le test</button>
+                <div class="speed-results" id="speedtest-result">
+                    <p class="hint">Aucun test lancé pour l'instant.</p>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Connexion web</h3>
+            <p class="hint">Vérifie la qualité de la liaison actuelle entre ce navigateur et le Pi :
+            latence, gigue et réponses manquantes. Utile pour valider une installation en LAN ou en WiFi,
+            sur chaque appareil de pilotage.</p>
+            <div class="row-end">
+                <button id="btn-webconn" class="btn" type="button">Tester la connexion</button>
+            </div>
+            <div id="webconn-result">
+                <p class="hint">Aucun test lancé pour l'instant.</p>
+            </div>
+        </div>
+
+        <div class="card">
+            <h3>Serveur (avancé)</h3>
             <div class="settings-grid">
                 <label>Interface d'écoute
                     <input type="text" id="net-host" placeholder="0.0.0.0">
@@ -518,14 +741,6 @@
             </p>
             <div class="row-end">
                 <button id="btn-network-save" class="btn btn-success" type="button">Enregistrer</button>
-            </div>
-        </div>
-
-        <div class="card">
-            <h3>Adresses du cockpit</h3>
-            <div id="net-addresses" class="device-list">—</div>
-            <div class="row-end">
-                <button id="btn-copy-url" class="btn btn-ghost" type="button">Copier l'adresse</button>
             </div>
         </div>
     </section>
@@ -550,49 +765,43 @@
 
         <div class="card">
             <h3>Fonctions des manettes</h3>
-            <p class="hint">Choisissez une fonction, cliquez sur « Assigner » dans la colonne de la manette
-            concernée, puis appuyez sur un bouton ou poussez un axe : l'association est enregistrée
-            aussitôt. Chaque manette garde ses propres associations ; la colonne « Toutes les manettes »
-            les applique à toutes.</p>
-            <p class="hint pad-capture-hint" id="pad-capture-hint" hidden></p>
-            <div id="pad-actions" class="pad-fn-table"></div>
-            <div class="row-end">
-                <button id="btn-pad-save" class="btn btn-success" type="button">Enregistrer les manettes</button>
+            <p class="hint">Une fonction, un geste : cliquez « Associer », puis appuyez sur un bouton ou
+            poussez un axe de la manette que vous voulez utiliser — elle est détectée automatiquement et
+            l'association enregistrée aussitôt. Une même fonction peut être associée sur plusieurs
+            manettes ; la pastille indique laquelle et ✕ retire l'association. « Assigner tête »
+            associe un geste de tête du BOB BL AR à une commande analogique.</p>
+            <p class="hint pad-glance-legend"><span class="pad-glance-swatch used"></span> commande déjà assignée
+            <span class="pad-glance-swatch free"></span> commande libre — aperçu des commandes restantes sur chaque
+            manette (les associations « Toutes » comptent pour les deux).</p>
+            <div class="pad-glance">
+                <div class="pad-glance-panel">
+                    <h4>DUALSHOCK 4 <span class="pad-test-live" id="pad-glance-ps-live">non connectée</span></h4>
+                    <canvas id="pad-glance-ps" class="pad-glance-canvas" width="320" height="220"></canvas>
+                    <p class="pad-glance-count" id="pad-glance-ps-count"></p>
+                </div>
+                <div class="pad-glance-panel">
+                    <h4>BOB BL AR <span class="pad-test-live" id="pad-glance-rov-live">non connectée</span></h4>
+                    <canvas id="pad-glance-rov" class="pad-glance-canvas" width="320" height="140"></canvas>
+                    <p class="pad-glance-count" id="pad-glance-rov-count"></p>
+                </div>
             </div>
-            <p class="hint">Les associations sont enregistrées dans config.json. Le Sub Simulator les lit
-            directement (avance / recul, latéral, montée / descente, cap, roulis, tangage, armement,
-            éclairage…) ; le bouton assigné à « Enregistrer la vue » pilote la capture vidéo + HUD du
-            cockpit. Tant qu'une fonction n'est pas associée, le Sub Simulator utilise son profil par
-            défaut sur la première manette (△ armer · ○ dry-run · □ lumières · Options E-Stop ·
-            Share RAZ · Croix retour surface).</p>
+            <p class="hint pad-capture-hint" id="pad-capture-hint" hidden></p>
+            <div id="pad-actions" class="pad-fn-list"></div>
+            <p class="hint">Le Sub Simulator lit directement ces associations. Tant qu'une fonction n'est
+            pas associée, il utilise son profil par défaut sur la première manette (△ armer · ○ dry-run ·
+            □ lumières · Options E-Stop · Share RAZ · Croix retour surface).</p>
         </div>
 
         <div class="card">
             <h3>Head-tracker BOB BL AR</h3>
-            <p class="hint">Associez d'abord « Activer / recentrer le head-tracker BOB BL AR » à un bouton
-            de la manette principale dans la table ci-dessus. Cet appui envoie la tare matérielle ; en mode
-            maintenu, les axes routés ci-dessous prennent le relais seulement pendant l'appui.</p>
-            <div class="settings-grid">
-                <label class="switch-label">Routage activé
-                    <input type="checkbox" id="head-enabled" class="switch">
-                </label>
-                <label>Périphérique BOB BL AR
-                    <select id="head-device"></select>
-                </label>
-                <label>Mode de routage
-                    <select id="head-mode">
-                        <option value="hold">Bouton maintenu</option>
-                        <option value="always">Toujours actif</option>
-                    </select>
-                </label>
+            <p class="hint">1. Définissez une fois le bouton magique de la manette principale.
+            2. Sur une action analogique, cliquez « Assigner tête », maintenez ce bouton puis faites le geste.
+            En pilotage, ce même bouton remet la tête à zéro et active ses commandes tant qu'il est maintenu.</p>
+            <div class="row-end">
+                <button id="btn-head-magic" class="btn btn-primary" type="button">Définir le bouton magique</button>
+                <button id="btn-head-hid-associate" class="btn btn-ghost" type="button">Associer BOB BL AR (WebHID)</button>
             </div>
             <p id="head-status" class="hint">BOB BL AR non détecté.</p>
-            <div id="head-routes" class="settings-grid"></div>
-            <div class="row-end">
-                <button id="btn-head-route-add" class="btn btn-mini" type="button">Ajouter un routage d'axe</button>
-            </div>
-            <p class="hint">Chaque routage expose la valeur normalisée de l'axe BOB sélectionné (−1 à +1)
-            vers l'action analogique choisie, sans imposer de destination matérielle.</p>
         </div>
 
         <div class="card">
@@ -615,6 +824,9 @@
                         <label>Tangage <select id="pad-map-pitch"></select></label>
                         <label>Cap <select id="pad-map-yaw"></select></label>
                         <label>Bouton <select id="pad-map-button"></select></label>
+                    </div>
+                    <div class="row-end">
+                        <button id="btn-pad-rov-tare" class="btn btn-primary" type="button">TARE</button>
                     </div>
                     <canvas id="pad-rov-canvas" class="pad-test-canvas" width="320" height="200"></canvas>
                     <div class="pad-axis-row" id="pad-rov-axes"></div>
@@ -696,8 +908,9 @@
                 </label>
                 <label>Source principale
                     <select id="cfg-source">
-                        <option value="cam1">Cam 1</option>
-                        <option value="cam2">Cam 2</option>
+                        <option value="cam1">Caméra Gauche (Avant G)</option>
+                        <option value="cam2">Caméra Droite (Avant D)</option>
+                        <option value="cam3">Caméra Arrière</option>
                     </select>
                 </label>
                 <label class="switch-label">Incrustation PIP

@@ -187,6 +187,7 @@ function hideAllViews() {
     byId('dashboard').style.display = 'none';
     byId('parameters').style.display = 'none';
     $$('.section-panel').forEach((section) => { section.style.display = 'none'; });
+    stopAlignPreview();                 // l'aperçu du binôme ne tourne que dans sa section
     if (HUD.editing) cancelHudEdit();   // quitter le Cockpit abandonne le mode mise en page
 }
 
@@ -217,8 +218,9 @@ function showSection(id, origin = 'dashboard') {
     window.scrollTo(0, 0);
     if (id === 'section-cockpit') { videoSectionActive = true; applyCockpitFromConfig(); connectAllFeeds(); }
     if (id === 'section-system') refreshSystemSection();
-    if (id === 'section-network') { lastNetworkSig = ''; renderNetworkAddresses(); refreshNetworkSection(); }
+    if (id === 'section-network') { netPollSig = ''; refreshNetworkSection(); }
     if (id === 'section-cameras') { loadVideoDevices().catch(() => {}); }
+    if (id === 'section-align3d') { startAlignPreview(); }
     if (id === 'section-videos') { loadVideos().catch((error) => toast('Médiathèque : ' + error.message, 'err')); }
     if (id === 'section-manette') { openPadSection(); startPadTest(); }
     if (id === 'section-simulator') renderSimTop();
@@ -274,9 +276,11 @@ function renderBadges() {
     }
     const videoBadge = byId('badge-video');
     if (VIDEO_STATUS) {
-        const cams = Object.values(VIDEO_STATUS.cameras || {});
+        // Le badge compte les caméras assignées : la vue Arrière (cam3) non
+        // assignée est exclue du ratio au lieu d'afficher un surcomptage.
+        const cams = Object.values(VIDEO_STATUS.cameras || {}).filter((cam) => cam.configured !== false);
         const live = cams.filter((cam) => cam.state === 'streaming').length;
-        videoBadge.className = 'badge ' + (live === cams.length ? 'badge-ok' : live > 0 ? 'badge-warn' : 'badge-off');
+        videoBadge.className = 'badge ' + (cams.length > 0 && live === cams.length ? 'badge-ok' : live > 0 ? 'badge-warn' : 'badge-off');
         videoBadge.textContent = `VIDÉO ${live}/${cams.length}`;
         videoBadge.title = cams.map((cam) => `${cam.name} : ${cam.state}`).join(' · ');
     }
@@ -287,7 +291,7 @@ async function pollSystem() {
         SYSTEM_STATUS = await getJSON('/api/system/status');
         renderBadges();
         if (byId('section-system').style.display === 'block') renderSystemSection();
-        if (byId('section-network').style.display === 'block') renderNetworkAddresses();
+        if (byId('section-network').style.display === 'block') maybeRefreshNetworkSection();
     } catch (_) { /* serveur momentanément indisponible : le prochain poll réessaiera */ }
 }
 
@@ -377,7 +381,7 @@ function watchServerReturn({ title, deadlineS }) {
  * ========================================================================= */
 
 const DEFAULT_TILE_ORDER = ['cockpit', 'videos', 'parameters', 'simulator'];
-const DEFAULT_PARAM_ORDER = ['cameras', 'network', 'config', 'manette', 'system', 'sim-config', 'glasses'];
+const DEFAULT_PARAM_ORDER = ['cameras', 'align3d', 'network', 'config', 'manette', 'system', 'sim-config', 'glasses'];
 
 /** Les deux grilles de tuiles : accueil (#nav-grid) et paramètres (#params-grid). */
 const TILE_GRIDS = {
@@ -569,9 +573,25 @@ const VIDEO_STATE = {
     feedsStarted: false,
 };
 
+/* Rôles du poste (Paramètres → Caméras) : cam1 = Caméra Gauche (Avant G),
+   cam2 = Caméra Droite (Avant D), cam3 = Caméra Arrière. Le compagnon
+   (incrustation PIP, second volet du duo) suit le binôme Avant G ↔ Avant D ;
+   la vue Arrière garde l'Avant G (flux de référence) en incrustation. */
+const CAM_IDS = ['cam1', 'cam2', 'cam3'];
+const CAM_ROLES = { cam1: 'Avant G', cam2: 'Avant D', cam3: 'Arrière' };
+
+function camRoleLabel(cam) {
+    return CAM_ROLES[cam] || cam;
+}
+
+function companionCam(cam) {
+    return cam === 'cam1' ? 'cam2' : cam === 'cam2' ? 'cam1' : 'cam1';
+}
+
 const FEEDS = {
     cam1: { img: null, overlay: null, detail: null, connectedAt: 0, lastRetry: 0, failed: false, polling: false, pollTimer: 0, pollUrl: '' },
     cam2: { img: null, overlay: null, detail: null, connectedAt: 0, lastRetry: 0, failed: false, polling: false, pollTimer: 0, pollUrl: '' },
+    cam3: { img: null, overlay: null, detail: null, connectedAt: 0, lastRetry: 0, failed: false, polling: false, pollTimer: 0, pollUrl: '' },
 };
 
 /* Repli iPadOS/iOS : WebKit — y compris Chrome — n'affiche pas un flux
@@ -587,6 +607,7 @@ let videoSectionActive = false;
 function initVideo() {
     FEEDS.cam1 = { img: byId('feed-cam1'), overlay: byId('overlay-cam1'), detail: byId('detail-cam1'), connectedAt: 0, lastRetry: 0, failed: false, polling: false, pollTimer: 0, pollUrl: '' };
     FEEDS.cam2 = { img: byId('feed-cam2'), overlay: byId('overlay-cam2'), detail: byId('detail-cam2'), connectedAt: 0, lastRetry: 0, failed: false, polling: false, pollTimer: 0, pollUrl: '' };
+    FEEDS.cam3 = { img: byId('feed-cam3'), overlay: byId('overlay-cam3'), detail: byId('detail-cam3'), connectedAt: 0, lastRetry: 0, failed: false, polling: false, pollTimer: 0, pollUrl: '' };
     Object.entries(FEEDS).forEach(([cam, feed]) => {
         // img.complete est ambigu avec multipart/x-mixed-replace : Chrome peut
         // le basculer à vrai alors que le flux reste valide. Seul error marque
@@ -646,19 +667,18 @@ function initVideo() {
         toast('Flux déconnectés');
     });
     byId('btn-video-shot').addEventListener('click', capturePhoto);
-    byId('btn-video-rec').addEventListener('click', () => toggleRecording(false));
-    byId('btn-video-recview').addEventListener('click', () => toggleRecording(true));
-    byId('btn-video-full').addEventListener('click', () => {
-        // Plein écran sur #video-view (et non la seule scène) : la barre de
-        // commandes reste accessible par-dessus la vidéo (chevron ou manette).
-        const view = byId('video-view');
-        const inFs = document.fullscreenElement || document.webkitFullscreenElement;
-        const method = inFs ? (document.exitFullscreen || document.webkitExitFullscreen)
-                            : (view.requestFullscreen || view.webkitRequestFullscreen);
-        if (!method) return;
-        const result = method.call(inFs ? document : view);
-        if (result && result.catch) result.catch(() => {});
+    // Case « 3D » cochée : le bouton REC devient la bascule du double
+    // enregistrement ffmpeg (le mode « REC vue » reste au navigateur).
+    byId('btn-video-rec').addEventListener('click', () => {
+        if (STEREO_STATE.active || (stereoChecked() && !REC_STATE.recorder)) {
+            toggleStereoRecording();
+            return;
+        }
+        toggleRecording(false);
     });
+    byId('btn-video-recview').addEventListener('click', () => toggleRecording(true));
+    byId('chk-rec-3d').addEventListener('change', refreshStereoToggle);
+    byId('btn-video-full').addEventListener('click', () => toggleFullscreen());
 
     // Badge REC du HUD : taille de police proportionnelle à la hauteur de la scène
     // (recalée aussi à l'entrée/sortie du plein écran), plancher 11 px pour rester lisible.
@@ -701,7 +721,7 @@ function initialToolbarCollapsed() {
 
 /** Définit la caméra principale (vue solo, principal du PIP, capture REC/photo). */
 function setVideoSource(src) {
-    VIDEO_STATE.source = src === 'cam2' ? 'cam2' : 'cam1';
+    VIDEO_STATE.source = CAM_IDS.includes(src) ? src : 'cam1';
     $$('#video-source .seg-btn').forEach((button) => button.classList.toggle('active', button.dataset.src === VIDEO_STATE.source));
     const cfgSource = byId('cfg-source');   // « Config Cockpit » suit la vue en cours
     if (cfgSource) cfgSource.value = VIDEO_STATE.source;
@@ -711,12 +731,90 @@ function setVideoSource(src) {
 
 /** Bouton « Permuter » : échange caméra principale et incrustation PIP. */
 function swapVideoSources() {
-    setVideoSource(VIDEO_STATE.source === 'cam1' ? 'cam2' : 'cam1');
-    const main = VIDEO_STATE.source === 'cam2' ? 'Cam 2' : 'Cam 1';
-    const other = VIDEO_STATE.source === 'cam2' ? 'Cam 1' : 'Cam 2';
+    const next = companionCam(captureCam());
+    setVideoSource(next);
     toast(VIDEO_STATE.mode === 'pip'
-        ? main + ' en principal · ' + other + ' en incrustation'
-        : main + ' en principale');
+        ? camRoleLabel(next) + ' en principal · ' + camRoleLabel(companionCam(next)) + ' en incrustation'
+        : 'Vue ' + camRoleLabel(next) + ' en principale');
+}
+
+/** Plein écran basculé sur #video-view (et non la seule scène) : la barre de
+ *  commandes reste accessible par-dessus la vidéo (chevron ou manette). */
+function toggleFullscreen() {
+    const view = byId('video-view');
+    if (!view) return;
+    const inFs = document.fullscreenElement || document.webkitFullscreenElement;
+    const method = inFs ? (document.exitFullscreen || document.webkitExitFullscreen)
+                        : (view.requestFullscreen || view.webkitRequestFullscreen);
+    if (!method) { toast('Plein écran indisponible dans ce navigateur', 'err'); return; }
+    const result = method.call(inFs ? document : view);
+    if (result && result.catch) {
+        result.catch(() => toast('Plein écran refusé — le navigateur exige un geste direct (souris ou écran tactile)', 'err', 6200));
+    }
+}
+
+/* -- Autopilote : type d'assistance du firmware BOB-CONTROL ----------------
+ * Le champ `mode` de la trame descendante est un masque superposable
+ * (PROTOCOLE_RPI5.md §4, v1.4.0+) : 0x01 auto roulis/tangage, 0x02 tenue de
+ * profondeur, 0x04 auto cap, 0x08 retour surface (prioritaire) ; 0 = passif.
+ * Le masque part au ROV via POST /api/rov/autopilot (émission immédiate) et
+ * n'est appliqué par le firmware que sur les trames armées (§6.2). */
+
+const ASSIST_BITS = { rt: 0x01, depth: 0x02, cap: 0x04, surface: 0x08 };
+const AUTOPILOT = { mode: 0 };
+
+/** Envoie le masque au ROV puis rafraîchit la barre (toast si refus). */
+async function setAutopilotMode(mode) {
+    const target = mode & 0x0F;
+    try {
+        const data = await postJSON('/api/rov/autopilot', { mode: target });
+        AUTOPILOT.mode = Number.isInteger(data.mode) ? data.mode & 0x0F : target;
+    } catch (error) {
+        toast('Autopilote refusé : ' + error.message, 'err', 5200);
+        return;
+    }
+    renderAutopilotBar();
+}
+
+/** Bascule d'une assistance (bouton manette : appui = inverse le bit). */
+function toggleAutopilotBit(name) {
+    setAutopilotMode(AUTOPILOT.mode ^ ASSIST_BITS[name]);
+}
+
+/** Force une assistance (bouton maintenu : vrai à l'appui, faux au relâchement). */
+function setAutopilotBit(name, on) {
+    setAutopilotMode(on ? AUTOPILOT.mode | ASSIST_BITS[name] : AUTOPILOT.mode & ~ASSIST_BITS[name]);
+}
+
+/** Barre de commandes : reflet du masque courant (« Passif » actif ⇔ masque nul). */
+function renderAutopilotBar() {
+    const group = byId('rov-autopilot');
+    if (!group) return;
+    $$('[data-assist]', group).forEach((button) => {
+        const key = button.dataset.assist;
+        const active = key === 'passif'
+            ? AUTOPILOT.mode === 0
+            : !!(AUTOPILOT.mode & ASSIST_BITS[key]);
+        button.classList.toggle('active', active);
+    });
+}
+
+function initAutopilotBar() {
+    const group = byId('rov-autopilot');
+    if (!group) return;
+    $$('[data-assist]', group).forEach((button) => {
+        button.addEventListener('click', () => {
+            const key = button.dataset.assist;
+            if (key === 'passif') setAutopilotMode(0);
+            else toggleAutopilotBit(key);               // clic = bascule du bit
+        });
+    });
+    getJSON('/api/rov/autopilot')
+        .then((data) => {
+            AUTOPILOT.mode = Number.isInteger(data.mode) ? data.mode & 0x0F : 0;
+            renderAutopilotBar();
+        })
+        .catch(() => { /* liaison série non prête : la barre reste sur passif */ });
 }
 
 /** Applique la disposition à la scène (classes, rôles des panneaux) + variables CSS du PIP. */
@@ -728,19 +826,23 @@ function applyVideoLayout() {
     applyPaneRoles();
     applyPipCss();
     const labels = { solo: 'Cam unique', duo: 'Côte à côte', pip: 'Incrustation' };
-    const roles = VIDEO_STATE.mode === 'duo' ? '' : ' · Cam ' + (VIDEO_STATE.source === 'cam2' ? '2' : '1') + ' principale';
+    const roles = VIDEO_STATE.mode === 'duo' ? '' : ' · vue ' + camRoleLabel(VIDEO_STATE.source);
     setText(byId('vinfo-mode'), 'Mode : ' + labels[VIDEO_STATE.mode] + roles);
     $$('#video-mode .seg-btn').forEach((button) => button.classList.toggle('active', button.dataset.mode === VIDEO_STATE.mode));
 }
 
-/** Rôles des panneaux posés sur les éléments : .pane-main (principal) / .pane-pip (incrustation). */
+/** Rôles des panneaux : .pane-main (principal), .pane-pip (incrustation),
+ *  .pane-idle (caché au repos) — le 3ᵉ flux (Arrière) n'apparaît que s'il est choisi. */
 function applyPaneRoles() {
     const mainCam = captureCam();
-    const pipCam = mainCam === 'cam1' ? 'cam2' : 'cam1';
-    byId('pane-' + mainCam).classList.add('pane-main');
-    byId('pane-' + mainCam).classList.remove('pane-pip');
-    byId('pane-' + pipCam).classList.add('pane-pip');
-    byId('pane-' + pipCam).classList.remove('pane-main');
+    const pipCam = companionCam(mainCam);
+    CAM_IDS.forEach((cam) => {
+        const pane = byId('pane-' + cam);
+        if (!pane) return;
+        pane.classList.toggle('pane-main', cam === mainCam);
+        pane.classList.toggle('pane-pip', cam === pipCam);
+        pane.classList.toggle('pane-idle', cam !== mainCam && cam !== pipCam);
+    });
 }
 
 function applyPipCss() {
@@ -755,7 +857,7 @@ function applyPipCss() {
 function applyCockpitFromConfig() {
     const cockpit = (CONFIG && CONFIG.cockpit) || {};
     VIDEO_STATE.mode = cockpit.mode || 'pip';
-    VIDEO_STATE.source = cockpit.source || 'cam1';
+    VIDEO_STATE.source = CAM_IDS.includes(cockpit.source) ? cockpit.source : 'cam1';
     const pip = (CONFIG && CONFIG.cameras && CONFIG.cameras.pip) || {};
     VIDEO_STATE.pip.enabled = pip.enabled !== false;
     VIDEO_STATE.pip.corner = pip.corner || 'bottom-right';
@@ -846,9 +948,8 @@ function stopFramePolling(cam) {
 function connectAllFeeds() {
     if (!videoSectionActive) return;
     VIDEO_STATE.feedsStarted = true;
-    connectFeed('cam1');
-    if (VIDEO_STATE.mode !== 'solo') connectFeed('cam2');
-    else if (VIDEO_STATE.source === 'cam2') connectFeed('cam2');
+    connectFeed(captureCam());
+    if (VIDEO_STATE.mode !== 'solo') connectFeed(companionCam(captureCam()));
 }
 
 function disconnectFeeds() {
@@ -897,29 +998,37 @@ function checkFeeds() {
 function renderVideoInfo() {
     if (!VIDEO_STATUS) return;
     const labels = { idle: 'repos', streaming: 'direct', error: 'erreur' };
-    [['cam1', 'vinfo-cam1'], ['cam2', 'vinfo-cam2']].forEach(([cam, chipId]) => {
+    CAM_IDS.forEach((cam) => {
         const status = (VIDEO_STATUS.cameras || {})[cam] || {};
-        const chip = byId(chipId);
-        const parts = [`Cam ${cam.slice(-1)} : ${labels[status.state] || status.state || '—'}`];
-        if (status.state === 'streaming') {
+        const chip = byId('vinfo-' + cam);
+        if (!chip) return;
+        const configured = status.configured !== false;   // cam3 peut rester non assignée
+        const parts = [camRoleLabel(cam) + ' : '
+            + (configured ? (labels[status.state] || status.state || '—') : 'non assignée')];
+        if (configured && status.state === 'streaming') {
             parts.push(`${status.stream_fps ?? '—'} fps`);
             const card = status.card ? status.card.split(':')[0].trim() : '';
             if (card) parts.push(card.slice(0, 22));
-        } else if (status.last_error) {
+        } else if (configured && status.last_error) {
             parts.push('⚠');
         }
         setText(chip, parts.join(' · '));
-        chip.className = 'info-chip ' + (status.state === 'streaming' ? 'chip-ok' : status.state === 'error' ? 'chip-warn' : 'chipless');
+        chip.className = 'info-chip ' + (!configured ? 'chipless'
+            : status.state === 'streaming' ? 'chip-ok' : status.state === 'error' ? 'chip-warn' : 'chipless');
         chip.title = status.last_error || status.device || '';
     });
 }
 
 function renderCamCardsLive() {
     if (!VIDEO_STATUS) return;
-    [['cam1', 'cam1-live'], ['cam2', 'cam2-live']].forEach(([cam, id]) => {
+    CAM_IDS.forEach((cam) => {
         const status = (VIDEO_STATUS.cameras || {})[cam] || {};
-        const target = byId(id);
-        if (status.state === 'streaming') {
+        const target = byId(cam + '-live');
+        if (!target) return;
+        if (status.configured === false) {
+            setText(target, '● non assignée');
+            target.className = 'cam-live';
+        } else if (status.state === 'streaming') {
             setText(target, `● direct ${status.stream_fps ?? '—'} fps`);
             target.className = 'cam-live ok';
         } else if (status.state === 'error') {
@@ -939,8 +1048,8 @@ async function reloadVideoFlux() {
         Object.keys(FEEDS).forEach((cam) => { FEEDS[cam].connectedAt = 0; });
         if (videoSectionActive) {
             VIDEO_STATE.feedsStarted = true;
-            connectFeed('cam1', true);
-            if (VIDEO_STATE.mode !== 'solo' || VIDEO_STATE.source === 'cam2') connectFeed('cam2', true);
+            connectFeed(captureCam(), true);
+            if (VIDEO_STATE.mode !== 'solo') connectFeed(companionCam(captureCam()), true);
         }
         toast('Flux rechargés');
     } catch (error) {
@@ -969,7 +1078,7 @@ function recConfig() {
 
 /** Caméra principale de la vue : flux capturé par REC / Photo et panneau principal. */
 function captureCam() {
-    return VIDEO_STATE.source === 'cam2' ? 'cam2' : 'cam1';
+    return CAM_IDS.includes(VIDEO_STATE.source) ? VIDEO_STATE.source : 'cam1';
 }
 
 /** Dimensions 16:9 de REC vue : jamais agrandies au-delà du flux principal.
@@ -1003,6 +1112,10 @@ function recButtonIds(view) {
 }
 
 function toggleRecording(view = false) {
+    if (STEREO_STATE.active) {
+        toast('Un enregistrement 3D est en cours — touchez STOP (REC) pour le clôturer', 'err');
+        return;
+    }
     if (REC_STATE.recorder) {
         if (REC_STATE.view !== view) { toast('Un enregistrement est déjà en cours'); return; }
         stopRecording();
@@ -1253,6 +1366,23 @@ async function finishRecording() {
 function renderRecStatus() {
     const chip = byId('rec-status');
     const badge = byId('rec-hud-badge');
+    if (STEREO_STATE.active) {
+        // 3D : le chronomètre suit l'horloge locale ; une paire interrompue
+        // (ffmpeg mort) reste affichée en erreur jusqu'à la clôture par STOP.
+        chip.hidden = false;
+        badge.hidden = false;
+        if (STEREO_STATE.failed) {
+            setText(chip, 'ENR 3D — ERREUR');
+            setText(byId('rec-hud-text'), 'REC 3D — ERREUR');
+        } else {
+            const seconds = Math.floor((Date.now() - STEREO_STATE.startedAt) / 1000);
+            const time = String(Math.floor(seconds / 60)).padStart(2, '0')
+                + ':' + String(seconds % 60).padStart(2, '0');
+            setText(chip, 'ENR 3D ' + time);
+            setText(byId('rec-hud-text'), 'REC 3D ' + time);
+        }
+        return;
+    }
     if (!REC_STATE.recorder) { chip.hidden = true; badge.hidden = true; return; }
     const seconds = Math.floor((Date.now() - REC_STATE.startedAt) / 1000);
     const time = String(Math.floor(seconds / 60)).padStart(2, '0')
@@ -1261,6 +1391,326 @@ function renderRecStatus() {
     badge.hidden = false;
     setText(chip, (REC_STATE.view ? 'ENR vue ' : 'ENR ') + time);
     setText(byId('rec-hud-text'), (REC_STATE.view ? 'REC VIDEO HUD ' : 'REC VIDEO ') + time);
+}
+
+/* -- Enregistrement stéréoscopique 3D (ffmpeg natif, sans ré-encodage) ------
+ * La case « 3D » fait du bouton REC la bascule du double enregistrement :
+ * POST /api/stereo/start|stop pilotent deux ffmpeg d'arrière-plan qui copient
+ * les flux MJPEG (aucun encodage navigateur) dans <stamp>_camG.mp4 et
+ * <stamp>_camD.mp4. Le rendu de la vue en cours n'est jamais sollicité.
+ */
+
+const STEREO_STATE = {
+    active: false,     // une paire est en cours (ou interrompue, à clôturer par STOP)
+    failed: false,     // un côté est mort : STOP clôture et dresse le rapport
+    stamp: '', startedAt: 0, timerId: 0, pollId: 0, busy: false,
+};
+
+function stereoChecked() {
+    const box = byId('chk-rec-3d');
+    return !!(box && box.checked);
+}
+
+/** Reflet visuel de la case « 3D » (classe posée sur l'étiquette). */
+function refreshStereoToggle() {
+    const box = byId('chk-rec-3d');
+    if (!box) return;
+    const label = box.closest('.rec-3d');
+    if (label) label.classList.toggle('on', box.checked);
+}
+
+/** Bascule du mode 3D : bouton REC (case cochée) et action manette « rec_3d ». */
+function toggleStereoRecording() {
+    if (STEREO_STATE.busy) return;
+    if (STEREO_STATE.active) stopStereoRecording();
+    else startStereoRecording();
+}
+
+async function startStereoRecording() {
+    if (REC_STATE.recorder) { toast('Arrêtez d’abord l’enregistrement navigateur en cours', 'err'); return; }
+    STEREO_STATE.busy = true;
+    setToolbarCollapsed(false, { persist: false });   // le chip « ENR 3D » doit rester visible
+    let stereo = null;
+    try {
+        const data = await postJSON('/api/stereo/start', {});
+        stereo = data.stereo || null;
+        if (stereo && stereo.recording) {
+            toast('Enregistrement 3D en cours — ' + (stereo.stamp || '') + '_camG.mp4 et _camD.mp4', 'ok', 4200);
+        }
+    } catch (error) {
+        toast('Enregistrement 3D refusé : ' + error.message, 'err', 5200);
+    } finally {
+        STEREO_STATE.busy = false;
+        if (stereo) syncStereoUI(stereo); else pollStereo();
+    }
+}
+
+async function stopStereoRecording() {
+    STEREO_STATE.busy = true;
+    let stereo = null;
+    try {
+        const data = await postJSON('/api/stereo/stop', {});
+        stereo = data.stereo || null;
+        const files = (data.result && data.result.files) || [];
+        const saved = files.filter((entry) => entry.bytes > 0 && !entry.error);
+        if (saved.length) {
+            toast('Enregistrement 3D terminé : ' + saved.map((entry) => entry.file).join(' · '), 'ok', 5200);
+            loadVideos().catch(() => { /* rechargée à l'ouverture de la section */ });
+        } else {
+            toast('Enregistrement 3D vide — aucun fichier déposé', 'err', 5200);
+        }
+        files.filter((entry) => entry.error).forEach((entry) => {
+            toast(entry.file + ' : ' + entry.error, 'err', 5200);
+        });
+    } catch (error) {
+        toast('Arrêt 3D refusé : ' + error.message, 'err', 4600);
+    } finally {
+        STEREO_STATE.busy = false;
+        if (stereo) syncStereoUI(stereo); else pollStereo();
+    }
+}
+
+/** Aligne l'UI sur l'état serveur (démarrage, arrêt, reprise après rechargement).
+ *
+ * L'état « error » du backend (un côté mort) est présenté comme actif en erreur :
+ * il exige une clôture par STOP, sinon tout nouveau départ est refusé.
+ */
+function syncStereoUI(stereo) {
+    const box = byId('chk-rec-3d');
+    if (box && stereo.ffmpeg === false && !box.disabled) {
+        box.disabled = true;
+        const label = box.closest('.rec-3d');
+        if (label) label.title = 'ffmpeg absent sur le Raspberry Pi — enregistrement 3D indisponible';
+    }
+    const failed = stereo.state === 'error';
+    const running = !!stereo.recording || failed;
+    if (running && !STEREO_STATE.active) {
+        STEREO_STATE.active = true;
+        STEREO_STATE.failed = failed;
+        STEREO_STATE.stamp = stereo.stamp || '';
+        STEREO_STATE.startedAt = Date.now() - Math.round((Number(stereo.elapsed_s) || 0) * 1000);
+        if (box && !box.checked) { box.checked = true; refreshStereoToggle(); }
+        byId('btn-video-rec').classList.add('recording');
+        setText(byId('btn-video-rec-label'), 'STOP');
+        startStereoPolling();
+        if (failed) toast('Enregistrement 3D interrompu : ' + (stereo.last_error || 'flux arrêté')
+            + ' — touchez STOP pour clôturer', 'err', 6200);
+    } else if (running && failed && !STEREO_STATE.failed) {
+        STEREO_STATE.failed = true;
+        toast('Enregistrement 3D interrompu : ' + (stereo.last_error || 'flux arrêté')
+            + ' — touchez STOP pour clôturer', 'err', 6200);
+    } else if (!running && STEREO_STATE.active) {
+        resetStereoUI();
+    }
+    if (STEREO_STATE.active) renderRecStatus();
+}
+
+function startStereoPolling() {
+    if (STEREO_STATE.pollId) return;
+    STEREO_STATE.timerId = setInterval(renderRecStatus, 500);
+    STEREO_STATE.pollId = setInterval(pollStereo, 1000);
+    renderRecStatus();
+}
+
+function resetStereoUI() {
+    clearInterval(STEREO_STATE.timerId);
+    clearInterval(STEREO_STATE.pollId);
+    Object.assign(STEREO_STATE, { active: false, failed: false, stamp: '', startedAt: 0, timerId: 0, pollId: 0 });
+    byId('btn-video-rec').classList.remove('recording');
+    setText(byId('btn-video-rec-label'), 'REC');
+    renderRecStatus();
+}
+
+/** Sonde l'état stéréo : uniquement hors action utilisateur (POST en vol). */
+async function pollStereo() {
+    if (STEREO_STATE.busy) return;
+    try {
+        const data = await getJSON('/api/stereo/status');
+        if (!STEREO_STATE.busy) syncStereoUI(data.stereo || {});
+    } catch (_) { /* serveur momentanément indisponible : le prochain poll réessaiera */ }
+}
+
+/* -- Alignement 3D : superposition des flux du binôme (réglage mécanique) --
+ * La section superpose en continu les flux Gauche et Droite du binôme stéréo
+ * à 50 %/50 % et trace la mire de guidage par-dessus. Sondage de frames :
+ * autonome, il ne dépend ni des FEEDS du Cockpit ni de leur état de connexion.
+ * Le binôme est résolu depuis cameras.stereo vers la caméra du relais qui
+ * porte le périphérique (par défaut : Avant G + Avant D).
+ */
+
+const ALIGN_PERIOD_MS = 150;     // répit entre deux passes de superposition
+const ALIGN = {
+    active: false, timer: 0, busy: false,
+    left: 'cam1', right: 'cam2',
+    drawn: false, fails: 0,
+};
+
+/** Caméras du relais qui portent les deux périphériques du binôme stéréo. */
+function alignPair() {
+    const byDevice = {};
+    CAM_IDS.forEach((cam) => {
+        const device = String(cameraConfig(cam).device || '').trim();
+        if (device) byDevice[device] = cam;
+    });
+    const stereo = stereoConfig();
+    const leftDevice = String(stereo.left_device || '').trim();
+    const rightDevice = String(stereo.right_device || '').trim();
+    return { left: byDevice[leftDevice] || null, right: byDevice[rightDevice] || null, leftDevice, rightDevice };
+}
+
+/** Récapitule les flux superposés et signale un binôme hors relais. */
+function updateAlignInfo() {
+    const pair = alignPair();
+    ALIGN.left = pair.left || 'cam1';
+    ALIGN.right = pair.right || 'cam2';
+    const hint = byId('align-info');
+    if (!hint) return;
+    if (!pair.left || !pair.right) {
+        hint.textContent = 'Binôme 3D (' + (pair.leftDevice || '—') + ' / ' + (pair.rightDevice || '—')
+            + ') : périphérique(s) non assigné(s) à une caméra — aperçu sur '
+            + camRoleLabel(ALIGN.left) + ' + ' + camRoleLabel(ALIGN.right)
+            + '. Assignez le binôme dans Paramètres → Caméras.';
+    } else {
+        hint.textContent = 'Superposition 50 %/50 % : ' + camRoleLabel(pair.left) + ' (' + pair.leftDevice
+            + ') + ' + camRoleLabel(pair.right) + ' (' + pair.rightDevice + ').'
+            + (pair.leftDevice === pair.rightDevice
+                ? ' Même périphérique des deux côtés — les deux images sont identiques.' : '');
+    }
+}
+
+function startAlignPreview() {
+    if (!byId('align-canvas') || ALIGN.active) return;
+    updateAlignInfo();
+    ALIGN.active = true;
+    ALIGN.fails = 0;
+    setText(byId('align-wait'), 'Connexion aux flux du binôme…');
+    byId('align-wait').hidden = ALIGN.drawn;   // une image est déjà à l'écran : pas de voile
+    alignTick();
+}
+
+function stopAlignPreview() {
+    ALIGN.active = false;
+    if (ALIGN.timer) { clearTimeout(ALIGN.timer); ALIGN.timer = 0; }
+}
+
+async function alignTick() {
+    if (!ALIGN.active || ALIGN.busy) return;
+    ALIGN.busy = true;
+    const results = await Promise.allSettled(
+        [alignLoadFrame(ALIGN.left), alignLoadFrame(ALIGN.right)]);
+    const ok = results.every((entry) => entry.status === 'fulfilled');
+    if (ok && ALIGN.active) {
+        drawAlignPreview(results[0].value, results[1].value);
+    } else {
+        // Libère les URL des côtés chargés quand l'autre a manqué (ou section quittée).
+        results.forEach((entry) => {
+            if (entry.status === 'fulfilled') URL.revokeObjectURL(entry.value.url);
+        });
+        if (ALIGN.active) {
+            ALIGN.fails += 1;
+            if (ALIGN.fails === 8) {
+                setText(byId('align-wait'), 'Aucune image du binôme — vérifiez les caméras (Paramètres → Caméras).');
+                byId('align-wait').hidden = false;
+            }
+        }
+    }
+    ALIGN.busy = false;
+    if (ALIGN.active) ALIGN.timer = setTimeout(alignTick, ALIGN_PERIOD_MS);
+}
+
+/** Une frame JPEG fraîche d'une caméra (blob → image) ; URL à révoquer après dessin. */
+function alignLoadFrame(cam) {
+    return fetch('/api/video/frame/' + cam + '?t=' + Date.now(), { cache: 'no-store' })
+        .then((response) => {
+            if (!response.ok) throw new Error('HTTP ' + response.status);
+            return response.blob();
+        })
+        .then((blob) => new Promise((resolve, reject) => {
+            const url = URL.createObjectURL(blob);
+            const img = new Image();
+            img.onload = () => resolve({ img, url });
+            img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('image illisible')); };
+            img.src = url;
+        }));
+}
+
+/** Dessine la superposition 50 %/50 % puis la mire, aux dimensions du flux gauche. */
+function drawAlignPreview(left, right) {
+    const canvas = byId('align-canvas');
+    const ctx = canvas.getContext('2d');
+    const width = left.img.naturalWidth || canvas.width;
+    const height = left.img.naturalHeight || canvas.height;
+    if (canvas.width !== width || canvas.height !== height) {
+        canvas.width = width;
+        canvas.height = height;
+    }
+    ctx.globalAlpha = 1;
+    ctx.drawImage(left.img, 0, 0, width, height);
+    // 50 %/50 % exact : le flux droit est mélangé à 50 % sur le gauche plein
+    // cadre (résolutions différentes : le droit est mis à l'échelle du gauche).
+    ctx.globalAlpha = 0.5;
+    ctx.drawImage(right.img, 0, 0, width, height);
+    ctx.globalAlpha = 1;
+    drawAlignReticle(ctx, width, height);
+    URL.revokeObjectURL(left.url);
+    URL.revokeObjectURL(right.url);
+    ALIGN.drawn = true;
+    ALIGN.fails = 0;
+    byId('align-wait').hidden = true;
+}
+
+/** Mire de guidage : réticule central + repères horizontaux parallèles. */
+function drawAlignReticle(ctx, width, height) {
+    const cx = Math.round(width / 2);
+    const cy = Math.round(height / 2);
+    const radius = Math.max(8, Math.round(height * 0.035));
+    ctx.save();
+    ctx.strokeStyle = 'rgba(0, 217, 255, 0.85)';
+    ctx.lineWidth = Math.max(1, Math.round(height / 300));
+    ctx.beginPath();
+    [0.25, 0.5, 0.75].forEach((ratio) => {      // repères horizontaux parallèles
+        const y = Math.round(height * ratio) + 0.5;
+        ctx.moveTo(0, y);
+        ctx.lineTo(width, y);
+    });
+    ctx.moveTo(cx + 0.5, 0);                    // verticale centrale (référence lacet)
+    ctx.lineTo(cx + 0.5, height);
+    ctx.stroke();
+    ctx.beginPath();                            // réticule : cercle + croix
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.moveTo(cx - radius * 2, cy + 0.5);
+    ctx.lineTo(cx + radius * 2, cy + 0.5);
+    ctx.moveTo(cx + 0.5, cy - radius * 2);
+    ctx.lineTo(cx + 0.5, cy + radius * 2);
+    ctx.stroke();
+    ctx.restore();
+}
+
+function openAlignHelp() {
+    const modal = byId('align-help');
+    if (!modal) return;
+    modal.hidden = false;
+    byId('btn-align-help-close').focus();
+}
+
+function closeAlignHelp() {
+    const modal = byId('align-help');
+    if (modal) modal.hidden = true;
+}
+
+function initAlignSection() {
+    byId('btn-align-help').addEventListener('click', openAlignHelp);
+    byId('btn-align-help-close').addEventListener('click', closeAlignHelp);
+    // Clic hors carte : fermeture ; Échap : ferme la modale avant le « retour » SPA.
+    byId('align-help').addEventListener('click', (event) => {
+        if (event.target === byId('align-help')) closeAlignHelp();
+    });
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape' || byId('align-help').hidden) return;
+        event.preventDefault();
+        event.stopPropagation();
+        closeAlignHelp();
+    }, true);
 }
 
 /* -- Photo : capture du flux affiché puis dépôt ----------------------------- */
@@ -2595,7 +3045,8 @@ function initHud() {
 
 let CONFIG = null;            // config.json courant (source de vérité serveur)
 let videoDevices = [];        // périphériques V4L2 détectés (GET /api/video/devices)
-let lastNetworkSig = '';      // évite de reconstruire la liste d'adresses au poll
+let NETWORK_STATUS = null;    // dernier état réseau (GET /api/network, section Réseau)
+let netPollSig = '';          // signature des adresses : évite un refresh inutile au poll
 
 async function loadConfig() {
     CONFIG = await getJSON('/api/config');
@@ -2623,10 +3074,12 @@ async function loadVideoDevices() {
     const data = await getJSON('/api/video/devices');
     videoDevices = data.devices || [];
     renderDeviceList();
-    ['cam1', 'cam2'].forEach((cam) => {
+    CAM_IDS.forEach((cam) => {
         const select = byId(cam + '-device');
         const current = cameraConfig(cam);
         select.innerHTML = '';
+        // Vue Arrière : l'assignation peut rester vide (le backend l'accepte).
+        if (cam === 'cam3') select.add(new Option('— Non assignée —', ''));
         videoDevices.forEach((device) => {
             select.add(new Option(`${device.device} — ${device.name}`, device.device));
         });
@@ -2636,11 +3089,57 @@ async function loadVideoDevices() {
         }
         if (current.device && Array.from(select.options).some((o) => o.value === current.device)) {
             select.value = current.device;
+        } else if (cam === 'cam3') {
+            select.value = '';
         } else if (select.options.length) {
             select.selectedIndex = 0;
         }
         fillResolutions(cam);
     });
+    fillStereoDevices();
+}
+
+/** Sélecteurs Caméra Gauche / Droite du mode 3D (mêmes périphériques détectés). */
+function fillStereoDevices() {
+    ['left', 'right'].forEach((side) => {
+        const select = byId('stereo-' + side + '-device');
+        if (!select) return;
+        const current = stereoConfig()[side + '_device'];
+        select.innerHTML = '';
+        videoDevices.forEach((device) => {
+            select.add(new Option(`${device.device} — ${device.name}`, device.device));
+        });
+        if (current && !deviceInfo(current)) {
+            // caméra débranchée : le chemin est conservé pour ne pas perdre le réglage
+            select.add(new Option(`${current} — (non détectée)`, current));
+        }
+        if (current && Array.from(select.options).some((option) => option.value === current)) {
+            select.value = current;
+        } else if (select.options.length) {
+            select.selectedIndex = 0;
+        }
+    });
+    updateStereoInfo();
+}
+
+/** Section stéréo de config.json (réglée en Paramètres → Caméras). */
+function stereoConfig() {
+    return (CONFIG && CONFIG.cameras && CONFIG.cameras.stereo) || {};
+}
+
+/** Précise pour chaque œil s'il passe par le relais d'une caméra du cockpit. */
+function updateStereoInfo() {
+    const hint = byId('stereo-dev-info');
+    if (!hint) return;
+    const describe = (device) => {
+        const relay = CAM_IDS.find((cam) => cameraConfig(cam).device === device);
+        return device + (relay ? ` — relais ${camRoleLabel(relay)}` : ' — accès direct');
+    };
+    const left = byId('stereo-left-device').value;
+    const right = byId('stereo-right-device').value;
+    if (!left || !right) { hint.textContent = '—'; return; }
+    hint.textContent = 'Gauche : ' + describe(left) + ' · Droite : ' + describe(right)
+        + (left === right ? ' — un même périphérique des deux côtés produira deux copies identiques.' : '');
 }
 
 /** Résolution actuellement choisie (repli : valeurs de config.json). */
@@ -2710,6 +3209,10 @@ function renderDeviceList() {
 function updateCamDeviceInfo(cam) {
     const target = byId(cam + '-dev-info');
     const device = byId(cam + '-device').value;
+    if (!device) {
+        setText(target, 'Non assignée — choisissez un périphérique, puis « Enregistrer & recharger les flux ».');
+        return;
+    }
     const info = deviceInfo(device);
     if (!info) { setText(target, `${device || '—'} — non détectée (débranchée ou occupée ?).`); return; }
     const [width, height] = cameraResolution(cam);
@@ -2725,26 +3228,65 @@ function updateCamDeviceInfo(cam) {
 
 /* -- Réseau ---------------------------------------------------------------- */
 
-function renderNetworkAddresses() {
-    const container = byId('net-addresses');
-    const port = (CONFIG && CONFIG.network && CONFIG.network.port) || location.port || 8080;
-    const addresses = (SYSTEM_STATUS && SYSTEM_STATUS.addresses) || [];
-    const signature = port + '|' + addresses.join(',');
-    if (signature === lastNetworkSig) return;
-    lastNetworkSig = signature;
+/** Rafraîchit la section Réseau si les adresses du Pi ont changé (poll 2 s). */
+function maybeRefreshNetworkSection() {
+    const signature = ((SYSTEM_STATUS && SYSTEM_STATUS.addresses) || []).join(',');
+    if (signature && signature !== netPollSig) {
+        netPollSig = signature;
+        refreshNetworkSection();
+    }
+}
+
+/** Carte « Accès au cockpit » : lignes LAN / WiFi / mDNS (URL web + SSH). */
+function renderNetAccess() {
+    const container = byId('net-access-list');
+    const port = (NETWORK_STATUS && NETWORK_STATUS.port) || location.port || 8080;
+    // Port 80 redirigé vers le cockpit : les URL s'affichent sans « :8080 ».
+    const portFree = !!(NETWORK_STATUS && NETWORK_STATUS.web_port_80);
+    const user = (NETWORK_STATUS && NETWORK_STATUS.ssh_user) || '';
     container.innerHTML = '';
-    if (!addresses.length) {
-        container.appendChild(el('p', 'hint', 'Adresses indisponibles — actualisation automatique…'));
-        lastNetworkSig = '';                 // retente au prochain poll
+    if (!NETWORK_STATUS || !NETWORK_STATUS.nmcli) {
+        container.appendChild(el('p', 'hint', 'Adresses indisponibles — état réseau à recharger.'));
         return;
     }
-    addresses.forEach((address) => {
-        const item = el('div', 'device-item');
-        item.appendChild(el('span', 'dev-name', 'Cockpit web'));
-        item.appendChild(el('span', 'dev-path', `http://${address}:${port}`));
-        item.appendChild(el('span', 'dev-meta', 'ouvrir sur le poste de pilotage'));
-        container.appendChild(item);
+    const lan = NETWORK_STATUS.lan || {};
+    const wifi = NETWORK_STATUS.wifi || {};
+    const lines = [];
+    if (lan.ip4) lines.push({ tag: `LAN (${lan.device})`, address: lan.ip4 });
+    if (wifi.ip4) lines.push({ tag: `WiFi (${wifi.device})`, address: wifi.ip4 });
+    if (NETWORK_STATUS.mdns) lines.push({ tag: 'mDNS', address: NETWORK_STATUS.mdns });
+    lines.forEach((line) => { line.current = location.hostname === line.address; });
+    if (!lines.length) {
+        container.appendChild(el('p', 'hint',
+            'Aucune adresse active — branchez le câble Ethernet ou connectez un réseau WiFi.'));
+        setText(byId('net-link-state'), 'Le Pi n\'est sur aucun réseau.');
+        return;
+    }
+    lines.forEach((line) => {
+        const url = portFree ? `http://${line.address}` : `http://${line.address}:${port}`;
+        const row = el('div', 'device-item');
+        row.appendChild(el('span', 'dev-name', line.tag));
+        row.appendChild(el('span', 'dev-path', url));
+        if (user) row.appendChild(el('span', 'dev-meta', `ssh ${user}@${line.address}`));
+        if (line.current) row.appendChild(el('span', 'kind-chip video', 'session actuelle'));
+        const actions = el('span', 'dev-actions');
+        const web = el('button', 'btn btn-mini', 'Copier URL');
+        web.type = 'button';
+        web.addEventListener('click', () => copyText(url, 'URL copiée'));
+        actions.appendChild(web);
+        if (user) {
+            const ssh = el('button', 'btn btn-mini', 'Copier SSH');
+            ssh.type = 'button';
+            ssh.addEventListener('click', () => copyText(`ssh ${user}@${line.address}`, 'Commande copiée'));
+            actions.appendChild(ssh);
+        }
+        row.appendChild(actions);
+        container.appendChild(row);
     });
+    const current = lines.find((line) => line.current);
+    setText(byId('net-link-state'), current
+        ? `Cette session passe par ${current.tag} — ${current.address}.`
+        : 'Cette session n\'emprunte aucune des adresses actives.');
 }
 
 /* -- Simulateur & formulaires ---------------------------------------------- */
@@ -2776,7 +3318,7 @@ function fillSettings() {
     if (!CONFIG) return;
 
     // Caméras (device / résolution / cadence : remplies par loadVideoDevices)
-    ['cam1', 'cam2'].forEach((cam) => {
+    CAM_IDS.forEach((cam) => {
         const quality = byId(cam + '-quality');
         quality.value = cameraConfig(cam).jpeg_quality ?? 80;
         setText(byId(cam + '-quality-val'), quality.value);
@@ -2794,8 +3336,8 @@ function fillSettings() {
     // Réseau
     byId('net-host').value = (CONFIG.network && CONFIG.network.host) || '0.0.0.0';
     byId('net-port').value = (CONFIG.network && CONFIG.network.port) || 8080;
-    lastNetworkSig = '';
-    renderNetworkAddresses();
+    netPollSig = '';
+    if (NETWORK_STATUS) renderNetAccess();
 
     // Lunettes AR
     const glasses = CONFIG.ar_glasses || {};
@@ -2836,7 +3378,7 @@ function fillSettings() {
 
 async function saveCameras() {
     const patch = { cameras: {} };
-    ['cam1', 'cam2'].forEach((cam) => {
+    CAM_IDS.forEach((cam) => {
         const [width, height] = cameraResolution(cam);
         patch.cameras[cam] = {
             device: byId(cam + '-device').value,
@@ -2850,9 +3392,27 @@ async function saveCameras() {
         await patchConfig(patch);
         Object.keys(FEEDS).forEach((cam) => { FEEDS[cam].connectedAt = 0; });
         await postJSON('/api/video/reload', {});
-        if (VIDEO_STATE.feedsStarted) { connectFeed('cam1', true); connectFeed('cam2', true); }
+        if (VIDEO_STATE.feedsStarted) {
+            connectFeed(captureCam(), true);
+            if (VIDEO_STATE.mode !== 'solo') connectFeed(companionCam(captureCam()), true);
+        }
         toast('Caméras enregistrées — flux rechargés');
         loadVideoDevices().catch(() => {});
+    } catch (error) {
+        toast('Enregistrement refusé : ' + error.message, 'err');
+    }
+}
+
+/** Réglage stéréo 3D seul : aucun flux à recharger (ffmpeg lit à la demande). */
+async function saveStereo() {
+    const patch = { cameras: { stereo: {
+        left_device: byId('stereo-left-device').value,
+        right_device: byId('stereo-right-device').value,
+    } } };
+    try {
+        await patchConfig(patch);
+        updateStereoInfo();
+        toast('Réglage stéréo 3D enregistré');
     } catch (error) {
         toast('Enregistrement refusé : ' + error.message, 'err');
     }
@@ -2868,7 +3428,6 @@ async function saveControls() {
                 enabled: byId('in-imu-enabled').checked,
                 device: byId('in-imu-device').value.trim(),
             },
-            head_tracker: headTrackerSettingsForm(),
         },
     };
     try { await patchConfig(patch); toast('Réglages manettes & IMU enregistrés'); }
@@ -2880,21 +3439,18 @@ async function saveNetwork() {
     const port = Number(byId('net-port').value) || 8080;
     try {
         await patchConfig({ network: { host, port } });
-        lastNetworkSig = '';
-        renderNetworkAddresses();
         toast('Réseau enregistré — appliquez avec « Relancer cockpit » (Paramètres → Système)', 'ok', 5200);
     } catch (error) { toast('Enregistrement refusé : ' + error.message, 'err'); }
 }
 
-async function copyCockpitUrl() {
-    const url = location.origin;
+/** Copie un texte (URL, commande SSH) — repli hors contexte sécurisé (HTTP local). */
+async function copyText(text, label = 'Copié') {
     try {
         if (navigator.clipboard && window.isSecureContext) {
-            await navigator.clipboard.writeText(url);
+            await navigator.clipboard.writeText(text);
         } else {
-            // HTTP sur réseau local = hors contexte sécurisé : repli classique
             const helper = document.createElement('textarea');
-            helper.value = url;
+            helper.value = text;
             helper.style.position = 'fixed';
             helper.style.opacity = '0';
             document.body.appendChild(helper);
@@ -2902,9 +3458,9 @@ async function copyCockpitUrl() {
             document.execCommand('copy');
             helper.remove();
         }
-        toast('Adresse copiée : ' + url);
+        toast(label + ' : ' + text);
     } catch (_) {
-        toast('Copie refusée — adresse du cockpit : ' + url, 'err', 4600);
+        toast('Copie refusée — ' + text, 'err', 4600);
     }
 }
 
@@ -2966,46 +3522,140 @@ async function saveCockpitLayout() {
     catch (error) { toast('Enregistrement refusé : ' + error.message, 'err'); }
 }
 
-/* -- Réseau WiFi (nmcli côté Pi) -------------------------------------------- */
+/* -- Réseau WiFi, priorité des liens et débit (nmcli côté Pi) ---------------- */
 
-let NETWORK_STATUS = null;
 let wifiNetworks = [];
 
-/** État réseau complet : interfaces, radio WiFi, préférence LAN uniquement. */
+/** État réseau complet : interfaces, radio WiFi, mode de priorité, nom .local. */
 async function refreshNetworkSection() {
     try {
         NETWORK_STATUS = await getJSON('/api/network');
         renderNetworkStatus();
     } catch (error) {
         setText(byId('wifi-state'), 'nmcli indisponible : ' + error.message);
+        setText(byId('net-link-state'), 'État réseau indisponible : ' + error.message);
     }
 }
 
+const NET_MODES = [
+    { id: 'lan_first', label: 'LAN prioritaire',
+      note: 'Le câble guide la connexion, le WiFi reste en secours (recommandé).' },
+    { id: 'wifi_first', label: 'WiFi prioritaire',
+      note: 'Le WiFi guide la connexion, le câble reste en secours.' },
+    { id: 'lan_only', label: 'LAN uniquement',
+      note: 'WiFi déconnecté — relançable ici à tout moment.' },
+    { id: 'wifi_only', label: 'WiFi uniquement',
+      note: 'L\'Ethernet est déconnecté (installation sans câble).' },
+];
+
 function renderNetworkStatus() {
     const status = NETWORK_STATUS || {};
-    const container = byId('net-devices');
-    container.innerHTML = '';
     if (!status.nmcli) {
         setText(byId('wifi-state'), 'NetworkManager (nmcli) indisponible'
             + (status.error ? ' — ' + status.error : ''));
-        container.appendChild(el('p', 'hint', 'État réseau indisponible.'));
+        setText(byId('net-mode-state'), 'Priorité des liens indisponible.');
+        byId('net-mode-grid').innerHTML = '';
+        byId('net-devices').innerHTML = '';
+        renderNetAccess();
         return;
     }
+    renderNetModes();
+    renderNetDevices();
     const wifi = status.wifi || {};
-    const state = wifi.connected
-        ? `WiFi connecté sur « ${wifi.connection || wifi.device} » (${wifi.device}).`
-        : 'WiFi non connecté.';
-    setText(byId('wifi-state'), state + (status.wifi_enabled
-        ? ' Le WiFi reste activable depuis cette page.'
-        : ' Préférence « LAN uniquement » : le WiFi sera déconnecté au prochain démarrage du service.'));
-    (status.devices || []).forEach((device) => {
+    let state;
+    if (wifi.connected) {
+        state = `WiFi connecté sur « ${wifi.connection || wifi.device} » (${wifi.device}`
+            + (wifi.ip4 ? ' · ' + wifi.ip4 : '')
+            + (wifi.signal != null ? ' · signal ' + wifi.signal + ' %' : '') + ').';
+    } else {
+        state = status.wifi_radio ? 'WiFi non connecté.' : 'WiFi non connecté — radio désactivée.';
+    }
+    setText(byId('wifi-state'), state);
+    byId('net-mdns-name').value = status.hostname || '';
+    const mdnsUrl = status.web_port_80
+        ? `http://${status.mdns}` : `http://${status.mdns}:${status.port}`;
+    setText(byId('mdns-state'), `Le Pi répond sur ce réseau à ${mdnsUrl}`
+        + (status.ssh_user ? ` — SSH : ssh ${status.ssh_user}@${status.mdns}` : '') + '.');
+    renderNetAccess();
+}
+
+/** Options de priorité des liens : une carte par mode, active mise en avant. */
+function renderNetModes() {
+    const grid = byId('net-mode-grid');
+    const current = (NETWORK_STATUS && NETWORK_STATUS.mode) || 'lan_first';
+    grid.innerHTML = '';
+    NET_MODES.forEach((mode) => {
+        const option = el('button', 'net-mode-option' + (mode.id === current ? ' active' : ''));
+        option.type = 'button';
+        option.appendChild(el('strong', '', mode.label));
+        option.appendChild(el('span', '', mode.note));
+        option.addEventListener('click', () => applyNetMode(mode.id));
+        grid.appendChild(option);
+    });
+    const active = NET_MODES.find((mode) => mode.id === current);
+    setText(byId('net-mode-state'), 'Mode actuel : ' + (active ? active.label : current)
+        + ' — enregistré dans config.json, réappliqué à chaque démarrage du Pi.');
+}
+
+/** Interfaces LAN / WiFi : état, adresse, signal et lien porteur de la connexion. */
+function renderNetDevices() {
+    const container = byId('net-devices');
+    const status = NETWORK_STATUS || {};
+    container.innerHTML = '';
+    const rows = [
+        { label: 'LAN', link: status.lan, wired: true, fallback: 'eth0' },
+        { label: 'WiFi', link: status.wifi, wired: false, fallback: 'wlan0' },
+    ];
+    rows.forEach(({ label, link, wired, fallback }) => {
         const item = el('div', 'device-item');
-        item.appendChild(el('span', 'dev-name', device.device));
-        item.appendChild(el('span', 'dev-path', device.type));
-        item.appendChild(el('span', 'dev-meta', device.state + (device.connection ? ' · ' + device.connection : '')));
+        item.appendChild(el('span', 'dev-name', `${label} — ${(link && link.device) || fallback}`));
+        let meta;
+        if (!link || !link.device) {
+            meta = 'interface absente';
+        } else if (link.connected) {
+            meta = 'connecté' + (link.ip4 ? ' · ' + link.ip4 : '')
+                + (link.connection ? ' · ' + link.connection : '')
+                + (link.signal != null ? ' · signal ' + link.signal + ' %' : '')
+                + (link.metric != null ? ' · priorité ' + link.metric : '');
+        } else if (wired && link.carrier === false) {
+            meta = 'câble débranché';
+        } else {
+            meta = 'non connecté';
+        }
+        item.appendChild(el('span', 'dev-meta', meta));
+        if (link && link.primary) item.appendChild(el('span', 'kind-chip video', 'lien actif'));
         container.appendChild(item);
     });
-    if (!(status.devices || []).length) container.appendChild(el('p', 'hint', 'Aucune interface détectée.'));
+}
+
+/** Bascule de priorité : confirmation seulement si la session courante va tomber. */
+async function applyNetMode(mode) {
+    const current = (NETWORK_STATUS && NETWORK_STATUS.mode) || 'lan_first';
+    if (mode === current) return;
+    if (mode === 'lan_only' && isSessionOn('wifi')) {
+        if (!window.confirm('Vous êtes connecté en WiFi : passer en « LAN uniquement » coupera cette session. Continuer ?')) return;
+    }
+    if (mode === 'wifi_only') {
+        const warning = isSessionOn('lan')
+            ? 'Vous êtes connecté en Ethernet : passer en « WiFi uniquement » coupera cette session — reconnectez-vous ensuite via l\'adresse WiFi.'
+            : 'L\'Ethernet va être déconnecté.';
+        if (!window.confirm(warning + ' Continuer ?')) return;
+    }
+    try {
+        const data = await postJSON('/api/network/mode', { mode });
+        toast(data.message || ('Priorité réseau : ' + mode), 'ok', 4200);
+        (data.warnings || []).forEach((warning) => toast(warning, 'err', 5200));
+        netPollSig = '';
+        await refreshNetworkSection();
+    } catch (error) {
+        toast('Changement refusé : ' + error.message, 'err', 5200);
+    }
+}
+
+/** Vrai si cette page est ouverte via l'adresse de l'interface demandée. */
+function isSessionOn(kind) {
+    const link = NETWORK_STATUS && NETWORK_STATUS[kind];
+    return !!(link && link.ip4 && link.ip4 === location.hostname);
 }
 
 async function scanWifi() {
@@ -3071,14 +3721,344 @@ async function connectWifi(ssid, row) {
     }
 }
 
-async function lanOnly() {
-    if (!window.confirm('Déconnecter le WiFi et rester en LAN uniquement ?')) return;
+/* -- Test de vitesse (jauge type speedtest) et connexion web ----------------- */
+
+const SPEED_GAUGE = { cx: 130, cy: 150, r: 104, a0: -105, a1: 105, max: 1000 };
+let speedGaugeBuilt = false;
+let speedTestRunning = false;
+
+/** Fraction 0→1 logarithmique : lisible de 1 à 1000 Mbit/s sur le cadran. */
+function gaugeFraction(mbps) {
+    const value = Math.max(0, Math.min(mbps || 0, SPEED_GAUGE.max));
+    return Math.log10(1 + value) / Math.log10(1 + SPEED_GAUGE.max);
+}
+
+/** Position sur le cadran (0° = aiguille haute, positif = horaire). */
+function gaugePolar(radius, angleDeg) {
+    const rad = (angleDeg * Math.PI) / 180;
+    return [SPEED_GAUGE.cx + radius * Math.sin(rad),
+            SPEED_GAUGE.cy - radius * Math.cos(rad)];
+}
+
+/** Construit arc, graduations et aiguille (une seule fois). */
+function buildSpeedGauge() {
+    if (speedGaugeBuilt) return;
+    const svg = $('#speed-gauge svg');
+    if (!svg) return;
+    const NS = 'http://www.w3.org/2000/svg';
+    const { cx, cy, r, a0, a1 } = SPEED_GAUGE;
+    const angleOf = (value) => a0 + (a1 - a0) * gaugeFraction(value);
+    const add = (tag, attrs, text) => {
+        const node = document.createElementNS(NS, tag);
+        Object.entries(attrs).forEach(([key, value]) => node.setAttribute(key, value));
+        if (text != null) node.textContent = text;
+        svg.appendChild(node);
+        return node;
+    };
+    const [x0, y0] = gaugePolar(r, a0);
+    const [x1, y1] = gaugePolar(r, a1);
+    const arc = `M ${x0.toFixed(1)} ${y0.toFixed(1)} A ${r} ${r} 0 1 1`
+        + ` ${x1.toFixed(1)} ${y1.toFixed(1)}`;
+    add('path', { d: arc, 'class': 'gauge-arc' });
+    [0, 1, 10, 100, 1000].forEach((value) => {
+        const angle = angleOf(value);
+        const [ix, iy] = gaugePolar(r, angle);
+        const [ox, oy] = gaugePolar(r - 9, angle);
+        add('line', { x1: ix.toFixed(1), y1: iy.toFixed(1),
+                      x2: ox.toFixed(1), y2: oy.toFixed(1), 'class': 'gauge-tick' });
+        const [lx, ly] = gaugePolar(r - 24, angle);
+        add('text', { x: lx.toFixed(1), y: ly.toFixed(1), 'class': 'gauge-label' }, String(value));
+    });
+    add('line', { id: 'speed-needle', x1: cx, y1: cy, x2: cx, y2: cy - r + 14,
+                  'class': 'gauge-needle' });
+    add('circle', { cx, cy, r: 7, 'class': 'gauge-hub' });
+    speedGaugeBuilt = true;
+}
+
+/** Valeur centrale + rotation de l'aiguille (Mbit/s). */
+function setSpeedLive(mbps) {
+    const value = byId('speedtest-live');
+    if (value) {
+        setText(value, mbps >= 100 ? String(Math.round(mbps)) : Number(mbps || 0).toFixed(1));
+    }
+    const needle = byId('speed-needle');
+    if (needle) {
+        const { a0, a1 } = SPEED_GAUGE;
+        const angle = a0 + (a1 - a0) * gaugeFraction(mbps);
+        needle.style.transform = `rotate(${angle.toFixed(2)}deg)`;
+    }
+}
+
+/** Compteur de débit instantané (fenêtre glissante ~700 ms) pour l'aiguille. */
+function rateMeter() {
+    const points = [];
+    return (bytes, nowMs) => {
+        points.push({ t: nowMs, b: bytes });
+        while (points.length > 2 && nowMs - points[0].t > 700) points.shift();
+        const first = points[0];
+        const span = (nowMs - first.t) / 1000;
+        if (span < 0.06) return null;
+        return ((bytes - first.b) * 8) / 1e6 / span;
+    };
+}
+
+/** Statistiques de latence (ms) : min / moyenne / max / gigue. */
+function pingStats(samples) {
+    const min = Math.min(...samples);
+    const max = Math.max(...samples);
+    const avg = samples.reduce((sum, value) => sum + value, 0) / samples.length;
+    const jitter = samples.slice(1)
+        .reduce((sum, value, i) => sum + Math.abs(value - samples[i]), 0)
+        / Math.max(samples.length - 1, 1);
+    return { min, max, avg, jitter };
+}
+
+/** Descente : le Pi streame ~`durationS` s (arrêt à l'échéance), lecture au
+ *  fil de l'eau. Débit retenu : fenêtre finale (~4 s) du flux — la mise en
+ *  route TCP ne pénalise pas la mesure, comme sur speedtest.net. */
+async function measureDownload(durationS) {
+    const started = performance.now();
+    const response = await fetch(
+        `/api/network/speedtest?mb=1024&seconds=${durationS}&t=${Date.now()}`,
+        { cache: 'no-store' });
+    if (!response.ok) throw new Error('HTTP ' + response.status);
+    const instant = rateMeter();
+    const marks = [];                     // (t, octets cumulés) pour la fenêtre finale
+    let received = 0;
+    if (response.body && response.body.getReader) {
+        const reader = response.body.getReader();
+        for (;;) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            received += value.length;
+            const now = performance.now();
+            marks.push({ t: now, b: received });
+            const mbps = instant(received, now);
+            if (mbps != null) setSpeedLive(mbps);
+        }
+    } else {                              // navigateur sans flux de lecture : repli global
+        received = (await response.arrayBuffer()).byteLength;
+    }
+    const seconds = Math.max((performance.now() - started) / 1000, 0.001);
+    const end = marks.length ? marks[marks.length - 1] : { t: performance.now(), b: received };
+    let ref = marks.length ? marks[0] : { t: started, b: 0 };
+    for (let index = marks.length - 1; index >= 0; index -= 1) {
+        if ((end.t - marks[index].t) / 1000 > 4) break;
+        ref = marks[index];
+    }
+    const span = Math.max((end.t - ref.t) / 1000, 0.05);
+    const window = ((end.b - ref.b) * 8) / 1e6 / span;
+    const mbps = window > 0 ? window : (received * 8) / 1e6 / seconds;
+    return { mbps, bytes: received, seconds };
+}
+
+/** Montée : rafales répétées jusqu'à ~`durationS` s, taille calibrée sur le
+ *  débit mesuré (~2 s par envoi). Chaque rafale est chronométrée par le Pi ;
+ *  le débit retenu couvre toute la phase (octets cumulés / temps total). */
+function measureUpload(durationS) {
+    const totalS = Math.max(durationS || 8, 2);
+    const instant = rateMeter();
+    return new Promise((resolve, reject) => {
+        const phaseStart = performance.now();
+        let payload = new Uint8Array(2 * 1048576);      // sonde de calibrage (2 Mo)
+        let sent = 0;
+        let bursts = 0;
+        let lastMbps = 0;
+        const finish = () => {
+            const seconds = Math.max((performance.now() - phaseStart) / 1000, 0.05);
+            resolve({ mbps: (sent * 8) / 1e6 / seconds, bytes: sent, seconds });
+        };
+        const sendBurst = () => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', '/api/network/speedtest/upload?t=' + Date.now());
+            xhr.upload.onprogress = (event) => {
+                const mbps = instant(sent + event.loaded, performance.now());
+                if (mbps != null) setSpeedLive(mbps);
+            };
+            xhr.onload = () => {
+                let data = {};
+                try { data = JSON.parse(xhr.responseText); } catch (_) { /* corps non JSON */ }
+                if (xhr.status !== 200) {
+                    reject(new Error(data.detail || ('HTTP ' + xhr.status)));
+                    return;
+                }
+                sent += data.bytes || 0;
+                bursts += 1;
+                lastMbps = data.mbps || lastMbps;
+                const elapsed = (performance.now() - phaseStart) / 1000;
+                if (elapsed >= totalS || bursts >= 60) { finish(); return; }
+                const sizeMb = Math.max(1, Math.min(32, lastMbps / 4));
+                payload = new Uint8Array(Math.round(sizeMb * 1048576));
+                sendBurst();
+            };
+            xhr.onerror = () => reject(new Error('envoi interrompu'));
+            xhr.send(payload);
+        };
+        sendBurst();
+    });
+}
+
+/** Test complet façon speedtest : ping → descente → montée, verdict caméras. */
+async function runSpeedTest() {
+    if (speedTestRunning) return;
+    speedTestRunning = true;
+    const button = byId('btn-speedtest');
+    const box = byId('speedtest-result');
+    const phase = byId('speedtest-phase');
+    const cfg = (NETWORK_STATUS && NETWORK_STATUS.speedtest) || { duration_s: 8, mbps_per_camera: 8 };
+    const durationS = cfg.duration_s || 8;
+    buildSpeedGauge();
+    button.disabled = true;
+    box.innerHTML = '';
+    box.appendChild(el('p', 'hint', 'Test en cours…'));
+    setSpeedLive(0);
     try {
-        const data = await postJSON('/api/network/disconnect', {});
-        toast(data.message || 'WiFi déconnecté — mode LAN uniquement');
+        setText(phase, 'Mesure du ping…');
+        const samples = [];
+        for (let index = 0; index < 8; index += 1) {
+            const started = performance.now();
+            await getJSON('/api/network/ping?t=' + Date.now());
+            samples.push(performance.now() - started);
+        }
+        const ping = pingStats(samples);
+        setText(phase, `Ping ${ping.avg.toFixed(1)} ms — descente en cours (${durationS} s)…`);
+        const down = await measureDownload(durationS);
+        setSpeedLive(down.mbps);
+        setText(phase, `Descente ${down.mbps.toFixed(1)} Mbit/s — montée en cours (${durationS} s)…`);
+        const up = await measureUpload(durationS);
+        setSpeedLive(up.mbps);
+        setText(phase, 'Test terminé.');
+        renderSpeedReport(ping, down, up, cfg);
+    } catch (error) {
+        setText(phase, 'Test interrompu.');
+        box.innerHTML = '';
+        box.appendChild(el('p', 'speed-verdict err', 'Test impossible : ' + error.message));
+    } finally {
+        button.disabled = false;
+        speedTestRunning = false;
+    }
+}
+
+/** Bilan : tuiles ping / descente / montée puis verdict streaming caméras. */
+function renderSpeedReport(ping, down, up, cfg) {
+    const box = byId('speedtest-result');
+    const perCamera = cfg.mbps_per_camera || 8;
+    const ratio = down.mbps / perCamera;
+    let verdict;
+    let tone;
+    if (ratio >= 2) {
+        verdict = 'Bon pour 2 caméras en même temps (vue + incrustation).';
+        tone = 'ok';
+    } else if (ratio >= 1) {
+        verdict = 'Bon pour 1 caméra en streaming.';
+        tone = 'ok';
+    } else if (ratio >= 0.6) {
+        verdict = 'Limite pour 1 caméra — réduisez résolution ou qualité JPEG.';
+        tone = 'warn';
+    } else {
+        verdict = 'Insuffisant pour le streaming — rapprochez-vous du routeur ou préférez le câble.';
+        tone = 'err';
+    }
+    const link = isSessionOn('lan') ? 'LAN (câble)'
+        : isSessionOn('wifi') ? 'WiFi' : location.hostname;
+    box.innerHTML = '';
+    const tiles = el('div', 'speed-tiles');
+    [
+        { label: 'Ping', value: ping.avg.toFixed(1), unit: 'ms',
+          sub: `min ${ping.min.toFixed(1)} · gigue ${ping.jitter.toFixed(1)} ms` },
+        { label: 'Descente', unit: 'Mbit/s',
+          value: down.mbps >= 100 ? String(Math.round(down.mbps)) : down.mbps.toFixed(1),
+          sub: `${(down.bytes / 1048576).toFixed(1)} Mo en ${down.seconds.toFixed(1)} s` },
+        { label: 'Montée', unit: 'Mbit/s',
+          value: up.mbps >= 100 ? String(Math.round(up.mbps)) : up.mbps.toFixed(1),
+          sub: `${(up.bytes / 1048576).toFixed(1)} Mo en ${(up.seconds || 0).toFixed(2)} s` },
+    ].forEach((tile) => {
+        const node = el('div', 'speed-tile');
+        node.appendChild(el('span', 'speed-tile-label', tile.label));
+        const value = el('strong', 'speed-tile-value', tile.value + ' ');
+        value.appendChild(el('span', 'speed-tile-unit', tile.unit));
+        node.appendChild(value);
+        node.appendChild(el('span', 'speed-tile-sub', tile.sub));
+        tiles.appendChild(node);
+    });
+    box.appendChild(tiles);
+    box.appendChild(el('p', 'speed-verdict ' + tone, verdict));
+    box.appendChild(el('p', 'speed-scale',
+        `Seuil caméra ≈ ${perCamera} Mbit/s · phases de ${cfg.duration_s || 8} s`
+        + ` · test effectué depuis : ${link}`));
+}
+
+/** Test de connexion web : latence, gigue et réponses manquantes du chemin Pi. */
+async function runWebConnTest() {
+    const button = byId('btn-webconn');
+    const box = byId('webconn-result');
+    button.disabled = true;
+    box.innerHTML = '';
+    const state = el('p', 'hint', 'Test en cours…');
+    box.appendChild(state);
+    const samples = [];
+    let lost = 0;
+    for (let index = 0; index < 10; index += 1) {
+        setText(state, `Test en cours… ${index + 1}/10`);
+        const started = performance.now();
+        try {
+            await getJSON('/api/network/ping?t=' + Date.now());
+            samples.push(performance.now() - started);
+        } catch (_) {
+            lost += 1;
+        }
+    }
+    box.innerHTML = '';
+    if (!samples.length) {
+        box.appendChild(el('p', 'speed-verdict err',
+            'Aucune réponse du Pi — liaison indisponible.'));
+        button.disabled = false;
+        return;
+    }
+    const stats = pingStats(samples);
+    let verdict;
+    let tone;
+    if (lost > 0) {
+        verdict = `${lost} réponse(s) manquante(s) — liaison instable : vérifiez câble ou WiFi.`;
+        tone = 'err';
+    } else if (stats.avg < 5) {
+        verdict = 'Excellente — liaison immédiate (réseau local).';
+        tone = 'ok';
+    } else if (stats.avg < 15) {
+        verdict = 'Très bonne — pilotage fluide.';
+        tone = 'ok';
+    } else if (stats.avg < 40) {
+        verdict = 'Correcte — pilotage possible, latence perceptible.';
+        tone = 'warn';
+    } else {
+        verdict = 'Moyenne — évitez le pilotage fin à distance, testez en LAN.';
+        tone = 'err';
+    }
+    const link = isSessionOn('lan') ? 'LAN (câble)'
+        : isSessionOn('wifi') ? 'WiFi' : location.hostname;
+    const head = el('p', 'speed-head');
+    head.appendChild(el('strong', 'speed-value ' + tone, stats.avg.toFixed(1) + ' ms'));
+    head.appendChild(el('span', 'dev-meta',
+        `min ${stats.min.toFixed(1)} · max ${stats.max.toFixed(1)} ms`
+        + ` · gigue ${stats.jitter.toFixed(1)} ms`
+        + (lost ? ` · ${lost} perdue(s)` : '')));
+    box.appendChild(head);
+    box.appendChild(el('p', 'speed-verdict ' + tone, verdict));
+    box.appendChild(el('p', 'speed-scale', `10 pings applicatifs · liaison testée : ${link}`));
+    button.disabled = false;
+}
+
+/** Renommage du Pi : hostname système + republication Avahi (adresse .local). */
+async function saveMdnsName() {
+    const name = byId('net-mdns-name').value.trim().toLowerCase();
+    try {
+        const data = await postJSON('/api/network/hostname', { name });
+        toast(data.message || ('Pi renommé : ' + data.mdns), 'ok', 5200);
+        (data.warnings || []).forEach((warning) => toast(warning, 'err', 5200));
+        netPollSig = '';
         await refreshNetworkSection();
     } catch (error) {
-        toast('Déconnexion refusée : ' + error.message, 'err');
+        toast('Renommage refusé : ' + error.message, 'err', 5200);
     }
 }
 
@@ -3096,6 +4076,10 @@ let padCaptureTimer = 0;
 /* -- BOB BL AR : source d'entrée générique, sans destination imposée -------- */
 const HEAD_TRACKER_ACTION = 'head_tracker_engage';
 const HEAD_TRACKER_STATE = { active: false, values: {}, deviceId: '', lastTareAt: 0 };
+const BOB_HID_FILTER = { vendorId: 0x1209, productId: 0xB0B1 };
+const BOB_HID = { device: null, restoring: null };
+let headTrackerCapture = null; // {kind: magic|gesture, ...} : apprentissage guidé
+let headTrackerCaptureTimer = 0;
 
 function headTrackerConfig() {
     const input = (CONFIG && CONFIG.input) || {};
@@ -3159,42 +4143,272 @@ function updateHeadTrackerInput(pads = padsConnected()) {
     }
     publishHeadTrackerInput(active, values, tracker && tracker.id);
     const status = byId('head-status');
-    if (status) setText(status, !cfg.enabled ? 'Routage désactivé.'
+    if (status) setText(status, !cfg.enabled ? 'Définissez le bouton magique pour activer le head-tracker.'
         : !tracker ? 'BOB BL AR non détecté.'
-            : active ? 'Routage actif — valeurs normalisées publiées.' : 'BOB BL AR prêt — en attente du bouton d’activation.');
+            : (active ? 'Geste de tête actif. ' : 'BOB BL AR prêt — maintenez le bouton magique. ')
+                + headTrackerHapticStatus(tracker));
+}
+
+function webHidAvailable() {
+    return !!(navigator.hid && window.isSecureContext);
+}
+
+function isBobHidDevice(device) {
+    return !!(device && device.vendorId === BOB_HID_FILTER.vendorId
+        && device.productId === BOB_HID_FILTER.productId);
+}
+
+function headTrackerHapticStatus(tracker = headTrackerPad()) {
+    if (tracker && tracker.vibrationActuator
+        && typeof tracker.vibrationActuator.playEffect === 'function') {
+        return 'Tare : Gamepad API.';
+    }
+    if (BOB_HID.device && BOB_HID.device.opened) return 'Tare : WebHID associée.';
+    if (!window.isSecureContext) return 'Tare : WebHID requiert HTTPS ou localhost.';
+    if (navigator.hid) return 'Tare : cliquez « Associer BOB BL AR ».';
+    return 'Tare : WebHID indisponible dans ce navigateur.';
+}
+
+async function openBobHid(device) {
+    if (!device.opened) await device.open();
+    BOB_HID.device = device;
+    renderHeadTrackerSettings();
+    return device;
+}
+
+async function restoreBobHid() {
+    if (!webHidAvailable()) return null;
+    if (BOB_HID.device && BOB_HID.device.opened) return BOB_HID.device;
+    if (BOB_HID.restoring) return BOB_HID.restoring;
+    BOB_HID.restoring = navigator.hid.getDevices()
+        .then((devices) => devices.find(isBobHidDevice) || null)
+        .then((device) => device ? openBobHid(device) : null)
+        .catch(() => null)
+        .finally(() => { BOB_HID.restoring = null; });
+    return BOB_HID.restoring;
+}
+
+async function associateBobHid() {
+    if (!window.isSecureContext) {
+        toast('WebHID exige HTTPS ou localhost : ouvrez le cockpit dans un contexte sécurisé', 'err', 6200);
+        return;
+    }
+    if (!navigator.hid) {
+        toast('WebHID est indisponible — utilisez Chromium ou Chrome récent', 'err', 5200);
+        return;
+    }
+    try {
+        let device = (await navigator.hid.getDevices()).find(isBobHidDevice);
+        if (!device) [device] = await navigator.hid.requestDevice({ filters: [BOB_HID_FILTER] });
+        if (!device) { toast('Association WebHID annulée', 'err'); return; }
+        await openBobHid(device);
+        toast('BOB BL AR associé pour la tare WebHID');
+    } catch (error) {
+        toast('Association WebHID impossible : ' + error.message, 'err', 6200);
+    }
+}
+
+function initBobHid() {
+    if (!navigator.hid) return;
+    navigator.hid.addEventListener('disconnect', (event) => {
+        if (event.device === BOB_HID.device) BOB_HID.device = null;
+        renderHeadTrackerSettings();
+    });
+    navigator.hid.addEventListener('connect', () => restoreBobHid().then(renderHeadTrackerSettings));
+    restoreBobHid().then(renderHeadTrackerSettings);
+}
+
+async function tareByWebHid() {
+    const device = await restoreBobHid();
+    if (!device) throw new Error('cliquez « Associer BOB BL AR » pour autoriser WebHID');
+    await device.sendReport(1, new Uint8Array([0xFF, 0xFF, 0x64, 0x00]));
+}
+
+function headTrackerMagicAction() {
+    const actions = (CONFIG && CONFIG.input && CONFIG.input.gamepad && CONFIG.input.gamepad.actions) || [];
+    return actions.find((action) => action && action.id === HEAD_TRACKER_ACTION) || null;
+}
+
+function headTrackerRoute(actionId) {
+    return headTrackerConfig().routes.find((route) => route && route.action === actionId) || null;
+}
+
+function endHeadTrackerCapture() {
+    headTrackerCapture = null;
+    clearInterval(headTrackerCaptureTimer);
+    headTrackerCaptureTimer = 0;
+    renderPadActions();
+    renderHeadTrackerSettings();
+}
+
+function beginMagicCapture() {
+    if (padCapture) endPadCapture();
+    const pads = padsConnected().filter((pad) => !isBobBlAr(pad));
+    if (!pads.length) { toast('Branchez la manette principale avant de définir le bouton magique', 'err'); return; }
+    headTrackerCapture = {
+        kind: 'magic',
+        pads: new Map(pads.map((pad) => [pad.id, padRestState(pad)])),
+    };
+    clearInterval(headTrackerCaptureTimer);
+    headTrackerCaptureTimer = setInterval(headTrackerCaptureStep, 60);
+    setText(byId('head-status'), 'Appuyez maintenant sur le bouton magique de la manette principale.');
+}
+
+function beginHeadTrackerGestureCapture(actionId) {
+    if (padCapture) endPadCapture();
+    const tracker = headTrackerPad();
+    if (!tracker) { toast('BOB BL AR non détecté — impossible de capturer le geste', 'err'); return; }
+    const magic = headTrackerMagicAction();
+    if (!magic || !padSourcesOf(magic).length) {
+        toast('Définissez d’abord le bouton magique', 'err');
+        return;
+    }
+    headTrackerCapture = { kind: 'gesture', actionId, trackerId: tracker.id, phase: 'magic', rest: null };
+    clearInterval(headTrackerCaptureTimer);
+    headTrackerCaptureTimer = setInterval(headTrackerCaptureStep, 60);
+    renderPadActions();
+    setText(byId('head-status'), 'Maintenez le bouton magique, puis faites le geste de tête souhaité.');
+}
+
+async function assignHeadTrackerMagic(pad, index) {
+    const actions = JSON.parse(JSON.stringify((CONFIG.input.gamepad && CONFIG.input.gamepad.actions) || []));
+    let magic = actions.find((action) => action && action.id === HEAD_TRACKER_ACTION);
+    if (!magic) {
+        magic = { id: HEAD_TRACKER_ACTION, label: 'Activer / recentrer le head-tracker BOB BL AR', sources: [] };
+        actions.push(magic);
+    }
+    magic.source = null;
+    magic.sources = [{ type: 'button', index, invert: false, pad: pad.id }];
+    const head = { ...headTrackerConfig(), enabled: true, mode: 'hold' };
+    try {
+        await patchConfig({ input: { gamepad: { enabled: true, actions }, head_tracker: head } });
+        buildPadDraft();
+        toast(`Bouton magique : ${padShortLabel(pad.id)} · Bouton ${index}`);
+    } catch (error) {
+        toast('Enregistrement refusé : ' + error.message, 'err');
+    } finally {
+        endHeadTrackerCapture();
+    }
+}
+
+async function assignHeadTrackerGesture(actionId, axis) {
+    const head = headTrackerConfig();
+    head.enabled = true;
+    head.mode = 'hold';
+    head.routes = head.routes.filter((route) => route && route.action !== actionId);
+    head.routes.push({ axis, action: actionId, invert: false });
+    try {
+        await patchConfig({ input: { head_tracker: head } });
+        toast(`Geste de tête → ${PAD_ITEMS.get(actionId).label} (axe BOB ${axis})`);
+    } catch (error) {
+        toast('Enregistrement refusé : ' + error.message, 'err');
+    } finally {
+        endHeadTrackerCapture();
+    }
+}
+
+function clearHeadTrackerGesture(actionId) {
+    const head = headTrackerConfig();
+    head.routes = head.routes.filter((route) => route && route.action !== actionId);
+    patchConfig({ input: { head_tracker: head } })
+        .then(() => { renderPadActions(); toast('Geste de tête retiré'); })
+        .catch((error) => toast('Enregistrement refusé : ' + error.message, 'err'));
+}
+
+/** Capture guidée : bouton principal, puis maintien + mouvement de tête. */
+function headTrackerCaptureStep() {
+    const capture = headTrackerCapture;
+    if (!capture || capture.saving) return;
+    const pads = padsConnected();
+    if (capture.kind === 'magic') {
+        for (const pad of pads) {
+            const rest = capture.pads.get(pad.id);
+            if (!rest) continue;
+            for (let index = 0; index < pad.buttons.length; index += 1) {
+                const button = pad.buttons[index];
+                if (button && !rest.buttons[index] && (button.pressed || button.value > 0.5)) {
+                    capture.saving = true;
+                    assignHeadTrackerMagic(pad, index);
+                    return;
+                }
+            }
+        }
+        return;
+    }
+    const tracker = pads.find((pad) => pad.id === capture.trackerId);
+    if (!tracker) { toast('BOB BL AR débranché — capture annulée', 'err'); endHeadTrackerCapture(); return; }
+    if (!headTrackerEngaged(pads)) {
+        capture.phase = 'magic';
+        capture.rest = null;
+        return;
+    }
+    if (capture.phase === 'magic') {
+        requestHeadTrackerTare();
+        capture.phase = 'settle';
+        capture.readyAt = Date.now() + 180;
+        setText(byId('head-status'), 'Tare envoyée — gardez le bouton maintenu, puis faites le geste.');
+        return;
+    }
+    if (capture.phase === 'settle') {
+        if (Date.now() < capture.readyAt) return;
+        capture.rest = Array.from(tracker.axes, (value) => Number(value) || 0);
+        capture.phase = 'gesture';
+        setText(byId('head-status'), 'Faites maintenant le geste de tête à associer.');
+        return;
+    }
+    for (let index = 0; index < tracker.axes.length; index += 1) {
+        if (Math.abs((tracker.axes[index] || 0) - (capture.rest[index] || 0)) > 0.35) {
+            capture.saving = true;
+            assignHeadTrackerGesture(capture.actionId, index);
+            return;
+        }
+    }
 }
 
 /** Tare BLE : toute magnitude non nulle déclenche l'Output Report BOB BL AR. */
 function requestHeadTrackerTare() {
     const now = Date.now();
     if (now - HEAD_TRACKER_STATE.lastTareAt < 250) return;
-    const tracker = headTrackerConfig().enabled ? headTrackerPad() : null;
+    const tracker = headTrackerPad();
     if (!tracker) { toast('BOB BL AR introuvable — tare non envoyée', 'err'); return; }
+    HEAD_TRACKER_STATE.lastTareAt = now;
     const actuator = tracker.vibrationActuator;
-    if (!actuator || typeof actuator.playEffect !== 'function') {
-        toast('BOB BL AR détecté, mais vibrationActuator est indisponible', 'err', 5200);
+    if (actuator && typeof actuator.playEffect === 'function') {
+        try {
+            Promise.resolve(actuator.playEffect('dual-rumble', {
+                duration: 100, strongMagnitude: 1.0, weakMagnitude: 1.0,
+            })).then(() => toast('Tare BOB BL AR envoyée'))
+                .catch(() => toast('Échec de l’envoi de la tare BOB BL AR', 'err'));
+        } catch (_) {
+            toast('Échec de l’envoi de la tare BOB BL AR', 'err');
+        }
         return;
     }
-    HEAD_TRACKER_STATE.lastTareAt = now;
-    try {
-        Promise.resolve(actuator.playEffect('dual-rumble', {
-            duration: 100, strongMagnitude: 1.0, weakMagnitude: 1.0,
-        })).then(() => toast('Tare BOB BL AR envoyée'))
-            .catch(() => toast('Échec de l’envoi de la tare BOB BL AR', 'err'));
-    } catch (_) {
-        toast('Échec de l’envoi de la tare BOB BL AR', 'err');
-    }
+    tareByWebHid().then(() => toast('Tare BOB BL AR envoyée via WebHID'))
+        .catch((error) => toast('Tare indisponible : ' + error.message, 'err', 6200));
 }
 
 /** Actions du poste exécutables dans le navigateur : id → fonction. */
 const PAD_TRIGGERS = {
     rec: () => toggleRecording(false),        // REC brut : flux caméra sans HUD
     rec_view: () => toggleRecording(true),    // REC vue : caméra principale + HUD
+    rec_3d: () => toggleStereoRecording(),    // REC 3D : bascule du double flux stéréo
     swap_cams: () => swapVideoSources(),      // Permuter : principale ↔ incrustation PIP
     toggle_toolbar: () => {                   // Barre de commandes : replier / déplier
         setToolbarCollapsed(!byId('video-toolbar').classList.contains('collapsed'));
     },
+    fullscreen: () => toggleFullscreen(),     // Plein écran : activer / quitter
     head_tracker_engage: requestHeadTrackerTare,
+    assist_rt: () => toggleAutopilotBit('rt'),        // Autopilote : stabiliser roulis / tangage
+    assist_depth: () => toggleAutopilotBit('depth'),  // Autopilote : tenir la profondeur
+    assist_cap: () => toggleAutopilotBit('cap'),      // Autopilote : tenir le cap
+    assist_passif: () => setAutopilotMode(0),         // Autopilote : tout couper (passif)
+    surface: () => setAutopilotBit('surface', true),  // Retour surface : maintenu (voir PAD_RELEASES)
+};
+
+/** Actions maintenues : exécutées au relâchement du geste (front descendant). */
+const PAD_RELEASES = {
+    surface: () => setAutopilotBit('surface', false), // Retour surface : fin du maintien
 };
 
 /** Catalogue des fonctions proposées, groupé pour le tableau de la section.
@@ -3228,8 +4442,22 @@ const PAD_FUNCTIONS = [
             { id: 'arm_toggle', label: 'Armer / désarmer', hint: 'Bascule à chaque appui', kind: 'button' },
             { id: 'estop', label: 'Arrêt d\'urgence (E-Stop)', kind: 'button' },
             { id: 'dryrun', label: 'Dry-run (moteurs à vide)', kind: 'button' },
-            { id: 'surface', label: 'Retour surface', hint: 'Bouton maintenu', kind: 'button' },
             { id: 'reset', label: 'RAZ de session', kind: 'button' },
+        ],
+    },
+    {
+        group: 'Autopilote',
+        items: [
+            { id: 'assist_rt', label: 'Stabiliser — roulis / tangage',
+              hint: 'Bascule l\'auto R/T (boucle PID)', kind: 'button' },
+            { id: 'assist_depth', label: 'Tenir la profondeur',
+              hint: 'Capture la profondeur à l\'activation (bascule)', kind: 'button' },
+            { id: 'assist_cap', label: 'Tenir le cap',
+              hint: 'Capture le cap à l\'activation (bascule)', kind: 'button' },
+            { id: 'surface', label: 'Retour surface',
+              hint: 'Bouton maintenu — prioritaire sur les autres', kind: 'button' },
+            { id: 'assist_passif', label: 'Autopilote passif — tout couper',
+              hint: 'Désactive toutes les assistances', kind: 'button' },
         ],
     },
     {
@@ -3238,17 +4466,14 @@ const PAD_FUNCTIONS = [
             { id: 'light', label: 'Éclairage on / off', kind: 'button' },
             { id: 'rec_view', label: 'Enregistrer la vue (vidéo + HUD)', kind: 'button' },
             { id: 'rec', label: 'Enregistrer la vidéo (sans HUD)', kind: 'button' },
+            { id: 'rec_3d', label: 'Enregistrer en stéréo 3D (deux caméras)',
+              hint: 'Bascule des caméras Gauche / Droite — case « 3D » du cockpit', kind: 'button' },
             { id: 'swap_cams', label: 'Permuter les caméras',
               hint: 'Échange caméra principale et PIP', kind: 'button' },
             { id: 'toggle_toolbar', label: 'Replier / déplier la barre de commandes',
               hint: 'Afficher ou masquer les boutons (utile en plein écran)', kind: 'button' },
-        ],
-    },
-    {
-        group: 'Head-tracker',
-        items: [
-            { id: 'head_tracker_engage', label: 'Activer / recentrer le head-tracker BOB BL AR',
-              hint: 'Appui : tare matérielle ; maintien : active le routage configuré', kind: 'button' },
+            { id: 'fullscreen', label: 'Plein écran — activer / quitter',
+              hint: 'Basculer l\'affichage vidéo en plein écran', kind: 'button' },
         ],
     },
     {
@@ -3277,6 +4502,15 @@ function padShortLabel(id) {
     if (!id) return 'Toutes les manettes';
     const short = id.replace(/\s*\(.*?\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
     return short.length > 30 ? short.slice(0, 28) + '…' : short;
+}
+
+/** Étiquette très courte pour les pastilles d'association (« DUALSHOCK 4 · Axe 2 »). */
+function padChipLabel(id) {
+    if (!id) return 'Toutes';
+    if (/bob bl ar/i.test(id)) return 'BOB BL AR';
+    if (/dualshock|wireless controller|playstation/i.test(id)) return 'DUALSHOCK 4';
+    const short = id.replace(/\s*\(.*?\)\s*/g, ' ').replace(/\s+/g, ' ').trim();
+    return short.length > 16 ? short.slice(0, 15) + '…' : short;
 }
 
 /** Sources d'une action : `sources` (courant) ou `source` (format hérité). */
@@ -3326,126 +4560,134 @@ function sourceLabel(source) {
     return kind + (source.invert ? ' · inversé' : '');
 }
 
-/** Colonnes du tableau : manettes détectées, manettes déjà associées, « toutes ». */
-function padColumns(pads) {
-    const columns = [];
-    const seen = new Set();
-    pads.forEach((pad) => {
-        if (seen.has(pad.id)) return;
-        seen.add(pad.id);
-        columns.push({ key: pad.id, label: padShortLabel(pad.id), connected: true });
-    });
-    padDraft.forEach((entry) => entry.sources.forEach((source) => {
-        if (!source.pad || seen.has(source.pad)) return;
-        seen.add(source.pad);
-        columns.push({ key: source.pad, label: padShortLabel(source.pad), connected: false });
-    }));
-    if (!columns.length || padDraft.some((entry) => entry.sources.some((source) => !source.pad))) {
-        columns.push({ key: '', label: 'Toutes les manettes', connected: pads.length > 0 });
-    }
-    return columns;
-}
-
+/** Liste des fonctions : associations visibles et bouton unique « Associer » par ligne. */
 function renderPadActions() {
     if (!padDraft) buildPadDraft();
     const container = byId('pad-actions');
     if (!container) return;
-    const pads = padsConnected();
-    const columns = padColumns(pads);
     container.innerHTML = '';
-    container.style.setProperty('--pad-cols', String(columns.length));
-    const head = el('div', 'pad-fn-head');
-    head.appendChild(el('span', 'pad-fn-title', 'Fonction'));
-    columns.forEach((column) => {
-        const cell = el('span', 'pad-fn-col' + (column.key && !column.connected ? ' offline' : ''),
-            column.label + (column.key && !column.connected ? ' — hors ligne' : ''));
-        if (column.key) cell.title = column.key;
-        head.appendChild(cell);
-    });
-    container.appendChild(head);
     PAD_FUNCTIONS.forEach((group) => {
         container.appendChild(el('div', 'pad-fn-group', group.group));
         group.items.forEach((item) => {
             const action = padDraft.find((entry) => entry.id === item.id);
-            if (action) container.appendChild(padFnRow(item, action, columns));
+            if (action) container.appendChild(padFnItem(item, action));
         });
     });
-    const extras = padDraft.filter((entry) => !PAD_ITEMS.has(entry.id));
+    const extras = padDraft.filter((entry) => !PAD_ITEMS.has(entry.id)
+        && entry.id !== HEAD_TRACKER_ACTION);
     if (extras.length) {
         container.appendChild(el('div', 'pad-fn-group', 'Autres fonctions du fichier'));
-        extras.forEach((action) => container.appendChild(padFnRow(null, action, columns)));
+        extras.forEach((action) => container.appendChild(padFnItem(null, action)));
     }
     const hint = byId('pad-capture-hint');
     if (hint) {
         if (padCapture) {
             const action = padDraft.find((entry) => entry.id === padCapture.actionId);
             const item = PAD_ITEMS.get(padCapture.actionId);
-            const where = padCapture.padKey ? padShortLabel(padCapture.padKey) : 'toutes les manettes';
             const what = !item || item.kind === 'both' ? 'poussez un axe ou appuyez sur un bouton'
                 : item.kind === 'axis' ? 'poussez un axe' : 'appuyez sur un bouton';
             hint.hidden = false;
-            hint.textContent = `« ${action ? action.label : padCapture.actionId} » · ${where} : ${what}`
-                + ' — enregistrement dès la détection (Échap pour annuler).';
+            hint.textContent = `« ${action ? action.label : padCapture.actionId} » : ${what} de la manette `
+                + 'que vous voulez utiliser — association enregistrée aussitôt (Échap pour annuler).';
         } else {
             hint.hidden = true;
         }
     }
+    renderPadGlance();
 }
 
-function padFnRow(item, action, columns) {
-    const row = el('div', 'pad-fn-row');
-    const name = el('span', 'pad-fn-name', item ? item.label : action.label);
-    if (item && item.hint) name.appendChild(el('em', 'pad-fn-note', item.hint));
-    row.appendChild(name);
-    columns.forEach((column) => row.appendChild(padFnCell(action, column.key)));
+/** Ligne d'une fonction : libellé, associations actuelles, boutons d'action. */
+function padFnItem(item, action) {
+    const row = el('div', 'pad-fn-item');
+    const capturing = !!padCapture && padCapture.actionId === action.id;
+    if (capturing) row.classList.add('capturing');
+
+    const info = el('div', 'pad-fn-info');
+    info.appendChild(el('span', 'pad-fn-name', item ? item.label : action.label));
+    if (item && item.hint) info.appendChild(el('em', 'pad-fn-note', item.hint));
+    row.appendChild(info);
+
+    const analog = !!(item && (item.kind === 'axis' || item.kind === 'both'));
+    const gesture = analog ? headTrackerRoute(action.id) : null;
+    const links = el('div', 'pad-fn-links');
+    action.sources.forEach((source) => links.appendChild(padSourceChip(action, source)));
+    if (gesture) links.appendChild(padGestureChip(action, gesture));
+    if (!action.sources.length && !gesture) links.appendChild(el('span', 'pad-fn-empty', 'Non associée'));
+    row.appendChild(links);
+
+    const buttons = el('div', 'pad-fn-actions');
+    if (capturing) {
+        const cancel = el('button', 'btn-mini capturing', 'Annuler');
+        cancel.type = 'button';
+        cancel.addEventListener('click', endPadCapture);
+        buttons.appendChild(cancel);
+    } else {
+        const assign = el('button', 'btn-mini assign', action.sources.length ? '+ Associer' : 'Associer');
+        assign.type = 'button';
+        assign.title = 'Puis appuyez sur un bouton ou poussez un axe de la manette voulue';
+        assign.addEventListener('click', () => beginPadCapture(action.id));
+        buttons.appendChild(assign);
+    }
+    if (analog) {
+        const captured = headTrackerCapture && headTrackerCapture.kind === 'gesture'
+            && headTrackerCapture.actionId === action.id;
+        const head = el('button', 'btn-mini head' + (captured ? ' capturing' : ''),
+            captured ? 'Annuler la capture' : gesture ? `Tête · Axe ${gesture.axis}` : 'Assigner tête');
+        head.type = 'button';
+        head.title = captured ? 'Annuler la capture du geste de tête'
+            : 'Maintenir le bouton magique, puis faire le geste de tête à associer';
+        head.addEventListener('click', () => {
+            if (captured) endHeadTrackerCapture();
+            else beginHeadTrackerGestureCapture(action.id);
+        });
+        buttons.appendChild(head);
+    }
+    row.appendChild(buttons);
     return row;
 }
 
-function padFnCell(action, padKey) {
-    const cell = el('div', 'pad-fn-cell');
-    const capturing = !!padCapture && padCapture.actionId === action.id && padCapture.padKey === padKey;
-    if (capturing) cell.classList.add('capturing');
-    const source = action.sources.find((entry) => (entry.pad || '') === padKey);
-    if (source) cell.appendChild(el('span', 'pad-fn-badge', sourceLabel(source)));
-    if (capturing) {
-        const cancel = el('button', 'btn-mini', 'Annuler');
-        cancel.type = 'button';
-        cancel.addEventListener('click', endPadCapture);
-        cell.appendChild(cancel);
-        return cell;
-    }
-    const assign = el('button', 'btn-mini', source ? 'Changer' : 'Assigner');
-    assign.type = 'button';
-    assign.addEventListener('click', () => beginPadCapture(action.id, padKey));
-    cell.appendChild(assign);
-    if (source) {
-        const clear = el('button', 'btn-mini warn', '✕');
-        clear.type = 'button';
-        clear.title = 'Effacer l\'association';
-        clear.addEventListener('click', () => clearPadSource(action, padKey));
-        cell.appendChild(clear);
-    }
-    return cell;
+/** Pastille d'une association : manette · contrôle, avec retrait. */
+function padSourceChip(action, source) {
+    const chip = el('span', 'pad-link');
+    chip.title = source.pad || 'Toutes les manettes';
+    chip.appendChild(el('b', 'pad-link-pad', source.pad ? padChipLabel(source.pad) : 'Toutes'));
+    chip.appendChild(el('span', 'pad-link-ctl', sourceLabel(source)));
+    const clear = el('button', 'pad-link-x', '✕');
+    clear.type = 'button';
+    clear.title = 'Retirer cette association';
+    clear.addEventListener('click', () => clearPadSource(action, source.pad || ''));
+    chip.appendChild(clear);
+    return chip;
+}
+
+/** Pastille du geste de tête associé à une action analogique. */
+function padGestureChip(action, route) {
+    const chip = el('span', 'pad-link head');
+    chip.title = 'Geste de tête BOB BL AR';
+    chip.appendChild(el('b', 'pad-link-pad', 'Tête'));
+    chip.appendChild(el('span', 'pad-link-ctl', 'Axe ' + route.axis));
+    const clear = el('button', 'pad-link-x', '✕');
+    clear.type = 'button';
+    clear.title = 'Retirer le geste de tête';
+    clear.addEventListener('click', () => clearHeadTrackerGesture(action.id));
+    chip.appendChild(clear);
+    return chip;
 }
 
 /* -- Capture : « Assigner » → attente d'un appui ou d'une poussée d'axe ----- */
 
-function beginPadCapture(actionId, padKey) {
-    if (padCapture && padCapture.actionId === actionId && padCapture.padKey === padKey) {
+/** « Associer » : la première manette manipulée devient le périphérique de l'association. */
+function beginPadCapture(actionId) {
+    if (padCapture && padCapture.actionId === actionId) {
         endPadCapture();
         return;
     }
     if (!navigator.getGamepads) { toast('Gamepad API non supportée par ce navigateur', 'err'); return; }
     const pads = padsConnected();
     if (!pads.length) { toast('Aucune manette détectée — allumez-la et appuyez sur un bouton', 'err'); return; }
-    const targets = padKey ? pads.filter((pad) => pad.id === padKey) : pads;
-    if (!targets.length) {
-        toast('Manette non connectée — rebranchez-la puis réessayez', 'err');
-        return;
-    }
     if (padCapture) endPadCapture();
-    padCapture = { actionId, padKey: padKey || '', pads: new Map() };
-    targets.forEach((pad) => padCapture.pads.set(pad.id, padRestState(pad)));
+    padCapture = { actionId, pads: new Map() };
+    pads.forEach((pad) => padCapture.pads.set(pad.id, padRestState(pad)));
     renderPadActions();
     clearInterval(padCaptureTimer);
     padCaptureTimer = setInterval(captureGamepadStep, 90);
@@ -3467,17 +4709,16 @@ function endPadCapture() {
     renderPadActions();
 }
 
-/** Scrute la manette visée : poussée d'axe (> 0,5 depuis le repos) ou bouton neuf. */
+/** Scrute les manettes : poussée d'axe (> 0,5 depuis le repos) ou bouton neuf. */
 function captureGamepadStep() {
     if (!padCapture) return;
     const pads = padsConnected();
-    if (padCapture.padKey && !pads.some((pad) => pad.id === padCapture.padKey)) {
+    if (!pads.length) {
         endPadCapture();
         toast('Manette débranchée — association annulée', 'err');
         return;
     }
     for (const pad of pads) {
-        if (padCapture.padKey && pad.id !== padCapture.padKey) continue;
         let rest = padCapture.pads.get(pad.id);
         if (!rest) {
             rest = padRestState(pad);
@@ -3511,14 +4752,11 @@ function captureGamepadStep() {
 function assignPadSource(pad, source) {
     const action = padDraft && padDraft.find((entry) => entry.id === padCapture.actionId);
     if (!action) { endPadCapture(); return; }
-    const key = padCapture.padKey;                                   // '' = toutes les manettes
-    const next = { type: source.type, index: source.index, invert: !!source.invert };
-    if (key) next.pad = pad.id;
-    action.sources = action.sources.filter((entry) => (entry.pad || '') !== key);
+    const next = { type: source.type, index: source.index, invert: !!source.invert, pad: pad.id };
+    action.sources = action.sources.filter((entry) => (entry.pad || '') !== pad.id);
     action.sources.push(next);
     endPadCapture();
-    const where = key ? ' · ' + padShortLabel(key) : '';
-    toast(`« ${action.label} » → ${sourceLabel(next)}${where}`);
+    toast(`« ${action.label} » → ${sourceLabel(next)} · ${padChipLabel(pad.id)}`);
     saveGamepad(true);                                               // enregistrement immédiat
 }
 
@@ -3566,7 +4804,7 @@ function scanGamepads(quiet) {
             list.appendChild(item);
         });
     }
-    renderPadActions();                                  // colonnes = manettes connectées
+    renderPadActions();                                  // la liste suit les manettes connectées
     renderHeadTrackerSettings();
     if (!quiet) toast(pads.length + ' manette(s) détectée(s)');
 }
@@ -3583,7 +4821,7 @@ function padReaderSources() {
 
 /** Front montant d'un bouton ou d'un axe assigné → déclenche l'action du poste. */
 function padReaderStep() {
-    if (padCapture || !navigator.getGamepads) return;   // assignation en cours : muet
+    if (padCapture || headTrackerCapture || !navigator.getGamepads) return;   // assignation en cours : muet
     const pads = padsConnected();
     updateHeadTrackerInput(pads);
     const sources = padReaderSources();
@@ -3603,12 +4841,16 @@ function padReaderStep() {
             const key = action.id + ':' + pad.id;
             const was = padPrevState.get(key) || false;
             padPrevState.set(key, active);
-            if (active && !was) PAD_TRIGGERS[action.id]();
+            if (active && !was) {
+                PAD_TRIGGERS[action.id]();
+            } else if (!active && was && PAD_RELEASES[action.id]) {
+                PAD_RELEASES[action.id]();                 // action maintenue : relâchement
+            }
         });
     });
 }
 
-/** Branchement/débranchement : met à jour la liste et les colonnes du tableau. */
+/** Branchement/débranchement : met à jour la liste des manettes et des fonctions. */
 function refreshPadSection() {
     const section = byId('section-manette');
     if (!section || section.style.display !== 'block') return;
@@ -3632,11 +4874,16 @@ const PAD_TEST = {
     map: { roll: 0, pitch: 1, yaw: 2, button: 0 },
 };
 
-/** Manette standard (PlayStation) et manette au mapping inconnu (BOB BL AR). */
+/** Manette standard (PlayStation) et manette au mapping inconnu (BOB BL AR).
+ *  Le BOB BL AR est écarté du panneau PlayStation même si le navigateur l'expose
+ *  avec un « mapping standard » (il ne doit jamais piloter le dessin PS4). */
 function padTestPads() {
     const pads = Array.from(navigator.getGamepads ? navigator.getGamepads() : []).filter(Boolean);
-    const ps = pads.find((pad) => pad.mapping === 'standard' && pad.buttons.length >= 12) || null;
     const rov = headTrackerPad(pads);
+    const others = pads.filter((pad) => pad !== rov && !isBobBlAr(pad));
+    const ps = others.find((pad) => /dualshock|wireless controller|playstation/i.test(pad.id || ''))
+        || others.find((pad) => pad.mapping === 'standard' && pad.buttons.length >= 12)
+        || null;
     return { ps, rov };
 }
 
@@ -3652,6 +4899,11 @@ function padTestLoop() {
     padTestSync(ps, rov);
     padDrawPs4(ps);
     padDrawRov(rov);
+    const glanceSig = padGlanceSignature(ps, rov);   // branchement / débranchement : rafraîchit l'aperçu
+    if (PAD_GLANCE.sig !== glanceSig) {
+        PAD_GLANCE.sig = glanceSig;
+        renderPadGlance();
+    }
 }
 
 function startPadTest() {
@@ -3740,10 +4992,10 @@ function padTestBuild(ps, rov) {
 /** États « connectée », barres d'axes et LEDs boutons à chaque image. */
 function padTestSync(ps, rov) {
     const livePs = byId('pad-ps-live');
-    setText(livePs, ps ? 'connectée' : 'non connectée');
+    setText(livePs, ps ? 'connectée · ' + padChipLabel(ps.id) : 'non connectée');
     livePs.classList.toggle('on', !!ps);
     const liveRov = byId('pad-rov-live');
-    setText(liveRov, rov ? 'connectée' : 'non connectée');
+    setText(liveRov, rov ? 'connectée · ' + padChipLabel(rov.id) : 'non connectée');
     liveRov.classList.toggle('on', !!rov);
 
     for (let i = 0; i < Math.max(4, ps ? ps.axes.length : 0); i += 1) {
@@ -3768,72 +5020,27 @@ function padTestSync(ps, rov) {
     }
 }
 
-/** Actions analogiques disponibles comme cibles d'un axe head-tracker. */
-function headTrackerAxisActions() {
-    return PAD_FUNCTIONS.flatMap((group) => group.items)
-        .filter((item) => item.kind === 'axis' || item.kind === 'both');
-}
-
-function headTrackerSettingsForm() {
-    const routes = Array.from(byId('head-routes').querySelectorAll('[data-head-route]')).map((row) => ({
-        axis: Number(row.querySelector('[data-head-axis]').value) || 0,
-        action: row.querySelector('[data-head-action]').value,
-        invert: row.querySelector('[data-head-invert]').checked,
-    })).filter((route) => route.action);
-    return {
-        enabled: byId('head-enabled').checked,
-        device_id: byId('head-device').value,
-        mode: byId('head-mode').value === 'always' ? 'always' : 'hold',
-        routes,
-    };
-}
-
-function headTrackerRouteRow(route, axisCount) {
-    const row = el('div', 'settings-grid');
-    row.dataset.headRoute = '1';
-    const axis = document.createElement('select');
-    axis.dataset.headAxis = '1';
-    for (let index = 0; index < axisCount; index += 1) axis.add(new Option('Axe BOB ' + index, String(index)));
-    axis.value = String(Math.min(Math.max(0, Number(route.axis) || 0), axisCount - 1));
-    const action = document.createElement('select');
-    action.dataset.headAction = '1';
-    headTrackerAxisActions().forEach((item) => action.add(new Option(item.label, item.id)));
-    action.value = route.action;
-    const invert = document.createElement('input');
-    invert.type = 'checkbox';
-    invert.className = 'switch';
-    invert.dataset.headInvert = '1';
-    invert.checked = !!route.invert;
-    const remove = el('button', 'btn btn-mini warn', 'Retirer');
-    remove.type = 'button';
-    remove.addEventListener('click', () => row.remove());
-    const axisLabel = el('label'); axisLabel.append('Axe BOB ', axis);
-    const actionLabel = el('label'); actionLabel.append('Action analogique ', action);
-    const invertLabel = el('label', 'switch-label', 'Inverser '); invertLabel.appendChild(invert);
-    row.append(axisLabel, actionLabel, invertLabel, remove);
-    return row;
-}
-
-function renderHeadTrackerSettings(settingsOverride) {
-    const cfg = settingsOverride || headTrackerConfig();
-    const pads = padsConnected();
-    const tracker = headTrackerPad(pads);
-    const device = byId('head-device');
-    if (!device) return;
-    const candidates = pads.filter((pad) => isBobBlAr(pad, '') || pad.id === cfg.device_id);
-    device.innerHTML = '';
-    device.add(new Option('Détection automatique (BOB BL AR)', ''));
-    candidates.forEach((pad) => device.add(new Option(padShortLabel(pad.id), pad.id)));
-    if (cfg.device_id && !Array.from(device.options).some((option) => option.value === cfg.device_id)) {
-        device.add(new Option(padShortLabel(cfg.device_id) + ' — hors ligne', cfg.device_id));
+function renderHeadTrackerSettings() {
+    const status = byId('head-status');
+    const associate = byId('btn-head-hid-associate');
+    if (!status || headTrackerCapture) return;
+    const tracker = headTrackerPad();
+    const magic = headTrackerMagicAction();
+    const source = magic && padSourcesOf(magic)[0];
+    if (associate) {
+        const gamepadHaptics = !!(tracker && tracker.vibrationActuator
+            && typeof tracker.vibrationActuator.playEffect === 'function');
+        associate.hidden = gamepadHaptics;
+        associate.textContent = BOB_HID.device && BOB_HID.device.opened
+            ? 'WebHID associé' : 'Associer BOB BL AR (WebHID)';
     }
-    device.value = cfg.device_id;
-    byId('head-enabled').checked = cfg.enabled;
-    byId('head-mode').value = cfg.mode;
-    const host = byId('head-routes');
-    host.innerHTML = '';
-    const axisCount = Math.max(1, tracker ? tracker.axes.length : 6);
-    cfg.routes.forEach((route) => host.appendChild(headTrackerRouteRow(route, axisCount)));
+    if (!tracker) { setText(status, 'BOB BL AR non détecté.'); return; }
+    if (!source) {
+        setText(status, 'BOB BL AR détecté — définissez le bouton magique. ' + headTrackerHapticStatus(tracker));
+        return;
+    }
+    setText(status, `BOB BL AR détecté · bouton magique : ${padShortLabel(source.pad)} · Bouton ${source.index}. `
+        + headTrackerHapticStatus(tracker));
 }
 
 /** Prépare un canvas de test (taille CSS × DPR) et retourne contexte + dimensions. */
@@ -3925,7 +5132,9 @@ function padTriggerGauge(c, x, y, h, level, label, color) {
     c.restore();
 }
 
-/** Croix directionnelle : chaque bras s'allume seul (12 haut, 13 bas, 14 gauche, 15 droite). */
+/** Croix directionnelle : chaque bras s'allume seul (12 haut, 13 bas, 14 gauche, 15 droite).
+ *  « color » peut être un tableau [haut, gauche, droite, bas] pour colorer chaque
+ *  bras indépendamment (aperçu des commandes assignées / libres). */
 function padDpad(c, cx, cy, up, down, left, right, color) {
     const arm = 8;
     const size = 26;
@@ -3936,12 +5145,14 @@ function padDpad(c, cx, cy, up, down, left, right, color) {
         [cx - arm, cy, arm * 2, size],
     ];
     const states = [up, left, right, down];
+    const perArm = Array.isArray(color) ? color : null;
     c.save();
     rects.forEach((rect, index) => {
         const on = states[index];
-        hudGlow(c, on, color, 10);
+        const armColor = perArm ? perArm[index] : color;
+        hudGlow(c, on, armColor, 10);
         padRoundRect(c, rect[0], rect[1], rect[2], rect[3], 3);
-        c.fillStyle = on ? color : 'rgba(255, 255, 255, 0.07)';
+        c.fillStyle = on ? armColor : 'rgba(255, 255, 255, 0.07)';
         c.globalAlpha = on ? 0.9 : 1;
         c.fill();
         c.globalAlpha = 1;
@@ -4183,6 +5394,185 @@ function padDrawRov(pad) {
     });
 }
 
+/* -- Aperçu des assignations : commandes assignées (rouge) / libres (vert) -- */
+
+const PAD_GLANCE = { free: '#2ee6a8', used: '#f4657e', sig: '' };
+
+/** Commandes (boutons, axes) déjà prises sur une famille de manettes.
+ *  « ps » = DUALSHOCK 4, sinon BOB BL AR ; une source sans clé pad vaut pour
+ *  toutes les manettes et les gestes de tête comptent comme axes du BOB. */
+function padGlanceSets(which) {
+    const buttons = new Set();
+    const axes = new Set();
+    (padDraft || []).forEach((action) => (action.sources || []).forEach((source) => {
+        if (!source) return;
+        if (source.pad) {
+            // L'id BOB BL AR est reconnu d'abord : certains descripteurs HID
+            // custom peuvent aussi contenir « wireless controller ».
+            const bob = /bob bl ar/i.test(source.pad);
+            const ps = !bob && /dualshock|wireless controller|playstation/i.test(source.pad);
+            if (which === 'ps' ? !ps : ps) return;
+        }
+        (source.type === 'axis' ? axes : buttons).add(source.index);
+    }));
+    if (which !== 'ps') headTrackerConfig().routes.forEach((route) => axes.add(route.axis));
+    return { buttons, axes };
+}
+
+/** Couleur d'une commande : rouge si déjà assignée, vert si libre. */
+function padGlanceColor(used) { return used ? PAD_GLANCE.used : PAD_GLANCE.free; }
+
+/** Accorde le nombre de commandes libres : « aucun libre », « 1 libre », « n libres ». */
+function padGlanceFree(count) {
+    return count <= 0 ? 'aucun libre' : count + ' libre' + (count > 1 ? 's' : '');
+}
+
+/** Ligne de statistiques sous un aperçu : boutons et axes encore libres. */
+function padGlanceCountText(totalButtons, usedButtons, totalAxes, usedAxes) {
+    const free = (total, used) => {
+        let count = 0;
+        for (let i = 0; i < total; i += 1) if (!used.has(i)) count += 1;
+        return padGlanceFree(count);
+    };
+    return `Boutons : ${free(totalButtons, usedButtons)} sur ${totalButtons} · `
+        + `Axes : ${free(totalAxes, usedAxes)} sur ${totalAxes}`;
+}
+
+/** Signature des manettes (id, tailles) : un changement rebâtit l'aperçu. */
+function padGlanceSignature(ps, rov) {
+    const part = (pad, tag) => pad
+        ? tag + pad.id + '/' + pad.buttons.length + '/' + pad.axes.length : tag + '0';
+    return part(ps, 'ps') + '|' + part(rov, 'rov');
+}
+
+/** Aperçu DUALSHOCK 4 : chaque commande en rouge (assignée) ou vert (libre). */
+function padGlancePs4(canvas, ps) {
+    const { ctx, w, h } = padCanvasFit(canvas);
+    hudFont = 1;
+    const scale = Math.min(w / 320, h / 220);
+    ctx.setTransform(scale, 0, 0, scale, (w - 320 * scale) / 2, (h - 220 * scale) / 2);
+    ctx.lineCap = 'round';
+    const { buttons, axes } = padGlanceSets('ps');
+    const C = (index) => padGlanceColor(buttons.has(index));
+
+    // Coque
+    const shell = new Path2D(PS4_SHELL);
+    ctx.fillStyle = '#16222e';
+    ctx.fill(shell);
+    ctx.strokeStyle = 'rgba(140, 180, 205, 0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke(shell);
+
+    // Gâchettes : pastilles L1/R1 (boutons 4/5) et L2/R2 (6/7)
+    padPill(ctx, 86, 16, 50, 15, 'L1', true, C(4));
+    padPill(ctx, 184, 16, 50, 15, 'R1', true, C(5));
+    padPill(ctx, 22, 87, 36, 15, 'L2', true, C(6));
+    padPill(ctx, 262, 87, 36, 15, 'R2', true, C(7));
+
+    // Croix directionnelle (12 haut, 13 bas, 14 gauche, 15 droite)
+    padDpad(ctx, 105, 88, true, true, true, true, [C(12), C(14), C(15), C(13)]);
+
+    // Boutons de face : △ 3, ○ 1, ✕ 0, □ 2
+    padFaceButton(ctx, 210, 60, 12, '△', true, C(3));
+    padFaceButton(ctx, 236, 86, 12, '○', true, C(1));
+    padFaceButton(ctx, 210, 112, 12, '✕', true, C(0));
+    padFaceButton(ctx, 186, 88, 12, '□', true, C(2));
+
+    // Zone tactile (17), Share (8), Options (9), bouton PS (16)
+    ctx.save();
+    padRoundRect(ctx, 136, 66, 34, 26, 5);
+    ctx.fillStyle = C(17);
+    ctx.globalAlpha = 0.55;
+    ctx.fill();
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = C(17);
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+    ctx.restore();
+    padPill(ctx, 116, 64, 16, 10, 'S', true, C(8));
+    padPill(ctx, 174, 64, 16, 10, 'O', true, C(9));
+    padFaceButton(ctx, 160, 122, 9, 'PS', true, C(16), 7);
+
+    // Sticks : axes 0/1 et clic L3 (10) ; axes 2/3 et clic R3 (11)
+    padStick(ctx, 104, 146, 0, 0, 21, true,
+        padGlanceColor(axes.has(0) || axes.has(1) || buttons.has(10)));
+    padStick(ctx, 216, 146, 0, 0, 21, true,
+        padGlanceColor(axes.has(2) || axes.has(3) || buttons.has(11)));
+
+    return {
+        totalB: Math.max(18, ps ? ps.buttons.length : 0),
+        totalA: Math.max(4, ps ? ps.axes.length : 0),
+    };
+}
+
+/** Rangées de pastilles numérotées : vert = libre, rouge = déjà assignée. */
+function padGlancePillRow(ctx, label, count, usedOf, x, y) {
+    hudText(ctx, label, x, y + 13, 8, 'left', 'rgba(190, 220, 235, 0.75)');
+    const start = x + 56;
+    let px = start;
+    let py = y;
+    for (let i = 0; i < count; i += 1) {
+        if (px + 26 > 306) { px = start; py += 30; }
+        const color = padGlanceColor(usedOf(i));
+        hudGlow(ctx, true, color, 12);
+        ctx.beginPath();
+        ctx.arc(px + 13, py + 13, 12, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.globalAlpha = 0.85;
+        ctx.fill();
+        ctx.globalAlpha = 1;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 1.4;
+        ctx.stroke();
+        hudText(ctx, String(i), px + 13, py + 13.5, 9, 'center', '#04121a');
+        px += 30;
+    }
+    return py + 26;
+}
+
+/** Aperçu BOB BL AR : pastilles des boutons et des axes (boîtier sans forme type). */
+function padGlanceRov(canvas, rov) {
+    const { ctx, w, h } = padCanvasFit(canvas);
+    hudFont = 1;
+    const scale = Math.min(w / 320, h / 140);
+    ctx.setTransform(scale, 0, 0, scale, (w - 320 * scale) / 2, (h - 140 * scale) / 2);
+    ctx.lineCap = 'round';
+    const { buttons, axes } = padGlanceSets('rov');
+    // Nombre de commandes : celui de la manette connectée, sinon les repères du
+    // test manette (2 boutons / 6 axes), élargi aux indices déjà référencés.
+    let totalB = Math.max(2, rov ? rov.buttons.length : 0);
+    buttons.forEach((index) => { totalB = Math.max(totalB, index + 1); });
+    let totalA = Math.max(6, rov ? rov.axes.length : 0);
+    axes.forEach((index) => { totalA = Math.max(totalA, index + 1); });
+    const yAxes = padGlancePillRow(ctx, 'BOUTONS', totalB, (i) => buttons.has(i), 14, 10) + 12;
+    padGlancePillRow(ctx, 'AXES', totalA, (i) => axes.has(i), 14, yAxes);
+    return { totalB, totalA };
+}
+
+/** Redessine l'aperçu des commandes libres / assignées des deux manettes. */
+function renderPadGlance() {
+    const psCanvas = byId('pad-glance-ps');
+    const rovCanvas = byId('pad-glance-rov');
+    if (!psCanvas || !rovCanvas) return;
+    const { ps, rov } = padTestPads();
+    const psLive = byId('pad-glance-ps-live');
+    setText(psLive, ps ? 'connectée · ' + padChipLabel(ps.id) : 'non connectée');
+    psLive.classList.toggle('on', !!ps);
+    const rovLive = byId('pad-glance-rov-live');
+    setText(rovLive, rov ? 'connectée · ' + padChipLabel(rov.id) : 'non connectée');
+    rovLive.classList.toggle('on', !!rov);
+
+    const psSets = padGlanceSets('ps');
+    const psTotals = padGlancePs4(psCanvas, ps);
+    setText(byId('pad-glance-ps-count'),
+        padGlanceCountText(psTotals.totalB, psSets.buttons, psTotals.totalA, psSets.axes));
+
+    const rovSets = padGlanceSets('rov');
+    const rovTotals = padGlanceRov(rovCanvas, rov);
+    setText(byId('pad-glance-rov-count'),
+        padGlanceCountText(rovTotals.totalB, rovSets.buttons, rovTotals.totalA, rovSets.axes));
+}
+
 /* -- Câblage des contrôles -------------------------------------------------- */
 
 function bindSlider(inputId, outputId, format = (v) => v) {
@@ -4196,20 +5586,28 @@ function initSettingsButtons() {
     bindSlider('in-maxspeed', 'in-maxspeed-val');
     bindSlider('cam1-quality', 'cam1-quality-val');
     bindSlider('cam2-quality', 'cam2-quality-val');
+    bindSlider('cam3-quality', 'cam3-quality-val');
 
     // Caméras : cascade + enregistrement
-    ['cam1', 'cam2'].forEach((cam) => {
+    CAM_IDS.forEach((cam) => {
         byId(cam + '-device').addEventListener('change', () => fillResolutions(cam));
         byId(cam + '-resolution').addEventListener('change', () => { fillFps(cam); updateCamDeviceInfo(cam); });
     });
     byId('btn-cameras-save').addEventListener('click', saveCameras);
+    ['stereo-left-device', 'stereo-right-device'].forEach((id) => {
+        byId(id).addEventListener('change', updateStereoInfo);
+    });
+    byId('btn-stereo-save').addEventListener('click', saveStereo);
 
     // Manettes & IMU
     byId('btn-controls-save').addEventListener('click', saveControls);
 
     // Réseau
     byId('btn-network-save').addEventListener('click', saveNetwork);
-    byId('btn-copy-url').addEventListener('click', copyCockpitUrl);
+    byId('btn-mdns-save').addEventListener('click', saveMdnsName);
+    byId('btn-speedtest').addEventListener('click', runSpeedTest);
+    byId('btn-webconn').addEventListener('click', runWebConnTest);
+    buildSpeedGauge();
 
     // Lunettes AR
     byId('btn-glasses-save').addEventListener('click', saveGlasses);
@@ -4230,19 +5628,17 @@ function initSettingsButtons() {
 
     // Réseau WiFi (nmcli côté Pi)
     byId('btn-wifi-scan').addEventListener('click', scanWifi);
-    byId('btn-lan-only').addEventListener('click', lanOnly);
 
     // Manette (Gamepad API)
     byId('btn-pad-scan').addEventListener('click', scanGamepads);
-    byId('btn-pad-save').addEventListener('click', saveGamepad);
-    byId('btn-head-route-add').addEventListener('click', () => {
-        const draft = headTrackerSettingsForm();
-        const tracker = headTrackerPad();
-        const axisCount = Math.max(1, tracker ? tracker.axes.length : 6);
-        draft.routes.push({ axis: 0, action: 'yaw', invert: false });
-        renderHeadTrackerSettings(draft);
+    byId('btn-pad-rov-tare').addEventListener('click', requestHeadTrackerTare);
+    byId('btn-head-magic').addEventListener('click', beginMagicCapture);
+    byId('btn-head-hid-associate').addEventListener('click', associateBobHid);
+    document.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        if (padCapture) endPadCapture();
+        if (headTrackerCapture) endHeadTrackerCapture();
     });
-    document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && padCapture) endPadCapture(); });
 
     // Sub Simulator
     byId('sim-enabled').addEventListener('change', renderSimState);
@@ -4253,8 +5649,8 @@ function initSettingsButtons() {
     byId('btn-sys-refresh').addEventListener('click', async () => {
         await pollSystem();
         renderSystemSection();
-        lastNetworkSig = '';
-        renderNetworkAddresses();
+        netPollSig = '';
+        if (byId('section-network').style.display === 'block') refreshNetworkSection();
         toast('État actualisé');
     });
     byId('btn-sys-restart').addEventListener('click', () => {
@@ -4280,6 +5676,7 @@ const selectedNames = new Set();     // noms cochés dans la liste
 let currentMediaName = null;
 let thumbObserver = null;
 let savedTimer = null;
+let proxyPollTimer = null;           // recharge la liste pendant une conversion d'aperçu web
 
 function mediaUrl(name) {
     return '/api/videos/file/' + encodeURIComponent(name);
@@ -4295,6 +5692,18 @@ async function loadVideos() {
     });
     if (data.folder) setText(byId('videos-folder-info'), data.folder);
     renderVideos();
+    scheduleProxyPoll();
+    if (currentMediaName) updatePlayerRawHint(MEDIA_BY_NAME.get(currentMediaName));
+}
+
+/** Recharge la liste tant qu'une conversion d'aperçu web est active côté Pi. */
+function scheduleProxyPoll() {
+    clearTimeout(proxyPollTimer);
+    proxyPollTimer = null;
+    const active = mediaList.some((item) => item.proxy_state === 'queued'
+        || item.proxy_state === 'converting');
+    if (!active) return;
+    proxyPollTimer = setTimeout(() => { loadVideos().catch(() => { /* prochain tick */ }); }, 1500);
 }
 
 /** Liste filtrée (recherche + étoiles + type) puis triée selon la barre d'outils. */
@@ -4386,16 +5795,77 @@ function mediaRow(item) {
     const nameLine = el('div', 'media-name');
     nameLine.appendChild(el('span', '', item.name));
     nameLine.appendChild(el('span', 'kind-chip ' + (photo ? 'photo' : 'video'), photo ? 'photo' : 'vidéo'));
+    if (item.web_proxy) nameLine.appendChild(el('span', 'kind-chip web', 'aperçu web'));
     main.appendChild(nameLine);
     const sub = el('div', 'media-sub');
     const facts = [fmtDate(item.mtime), fmtDuration(item.duration_s), fmtBytes(item.size_bytes)].filter(Boolean);
     sub.appendChild(el('span', '', facts.join(' · ')));
     sub.appendChild(starsDisplay(item.stars || 0));
+    if (item.needs_web && !item.web_proxy) sub.appendChild(rawBadge(item));
     main.appendChild(sub);
     row.appendChild(main);
 
+    const actions = mediaActions(item);
+    if (actions) row.appendChild(actions);
+
     row.addEventListener('click', () => openPlayer(item.name));
     return row;
+}
+
+/** Badge d'état de l'aperçu web d'un brut non lisible par les navigateurs. */
+function rawBadge(item) {
+    const state = item.proxy_state || 'none';
+    if (state === 'queued' || state === 'converting') {
+        const badge = el('span', 'raw-badge busy');
+        badge.appendChild(el('span', 'proxy-spin'));
+        badge.appendChild(el('span', '', state === 'queued' ? 'Aperçu web : en attente…'
+            : `Aperçu web : génération… ${item.proxy_progress != null ? item.proxy_progress + ' %' : ''}`));
+        return badge;
+    }
+    if (state === 'error') {
+        const badge = el('span', 'raw-badge fail', 'Aperçu web : échec — relancer');
+        badge.title = item.proxy_error || '';
+        return badge;
+    }
+    return el('span', 'raw-badge', 'Format brut — Aperçu web à générer');
+}
+
+/** Boutons de la ligne : génération d'aperçu web + téléchargement direct (VLC). */
+function mediaActions(item) {
+    if (!item.needs_web || item.web_proxy) return null;
+    const state = item.proxy_state || 'none';
+    if (state === 'queued' || state === 'converting') return null;
+    const wrap = el('div', 'media-actions');
+    const genBtn = el('button', 'btn-mini',
+        state === 'error' ? 'Relancer l\'aperçu web' : 'Générer l\'aperçu web');
+    genBtn.type = 'button';
+    genBtn.title = 'Convertir en H.264 lisible par le navigateur — le fichier brut reste intact';
+    genBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        generateWebProxy(item.name);
+    });
+    const vlcBtn = el('button', 'btn-mini', '⬇ Télécharger (VLC)');
+    vlcBtn.type = 'button';
+    vlcBtn.title = 'Télécharger le fichier brut (lecture dans VLC) — rush maître du montage 3D';
+    vlcBtn.addEventListener('click', (event) => {
+        event.stopPropagation();
+        downloadMedia(item.name);
+    });
+    wrap.append(genBtn, vlcBtn);
+    return wrap;
+}
+
+/** Lance la génération de l'aperçu web ; le fichier brut n'est jamais modifié. */
+async function generateWebProxy(name) {
+    try {
+        const data = await postJSON('/api/videos/proxy/' + encodeURIComponent(name), {});
+        const state = (data.proxy && data.proxy.state) || '';
+        if (state === 'ready') toast('Aperçu web déjà disponible');
+        else toast('Génération de l\'aperçu web lancée — le fichier brut reste intact');
+        await loadVideos();
+    } catch (error) {
+        toast('Aperçu web : ' + error.message, 'err', 4600);
+    }
 }
 
 /** Met à jour la barre de sélection : compteur, « tout sélectionner », boutons. */
@@ -4504,19 +5974,22 @@ function viewSelection() {
     openPlayer(name);
 }
 
+/** Téléchargement direct d'un média — le fichier brut (lecture VLC, montage 3D). */
+function downloadMedia(name) {
+    const link = document.createElement('a');
+    link.href = mediaUrl(name);
+    link.download = name;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+}
+
 /** Téléchargements espacés : les navigateurs bloquent les rafales de liens. */
 function downloadSelection() {
     const names = Array.from(selectedNames);
     if (!names.length) return;
     names.forEach((name, index) => {
-        setTimeout(() => {
-            const link = document.createElement('a');
-            link.href = mediaUrl(name);
-            link.download = name;
-            document.body.appendChild(link);
-            link.click();
-            link.remove();
-        }, index * 350);
+        setTimeout(() => downloadMedia(name), index * 350);
     });
     toast(`${names.length} téléchargement${names.length > 1 ? 's' : ''} lancé${names.length > 1 ? 's' : ''}`);
 }
@@ -4610,7 +6083,8 @@ function buildThumb(name, container) {
     }, { once: true });
     video.addEventListener('seeked', () => finish(false), { once: true });
     video.addEventListener('error', () => finish(true), { once: true });
-    video.src = mediaUrl(name);
+    const item = MEDIA_BY_NAME.get(name);
+    video.src = mediaUrl(item && item.web_proxy ? item.web_proxy : name);
 }
 
 /* -- Lecteur : lecture, étoiles, notes -------------------------------------- */
@@ -4626,6 +6100,36 @@ function renderPlayerStars(stars) {
     $$('#player-stars .star').forEach((star) => {
         star.classList.toggle('on', Number(star.dataset.value) <= stars);
     });
+}
+
+/** Encart du lecteur : brut non lisible navigateur → aperçu web ou VLC. */
+function updatePlayerRawHint(item) {
+    const hint = byId('player-raw-hint');
+    const show = !!item && (item.kind || 'video') !== 'photo'
+        && item.needs_web && !item.web_proxy;
+    hint.hidden = !show;
+    if (!show) return;
+    const state = item.proxy_state || 'none';
+    const badge = byId('player-raw-badge');
+    const genBtn = byId('btn-player-gen-proxy');
+    genBtn.disabled = false;
+    if (state === 'queued' || state === 'converting') {
+        badge.className = 'raw-badge busy';
+        badge.textContent = state === 'queued' ? 'Aperçu web : en attente…'
+            : `Aperçu web : génération… ${item.proxy_progress != null ? item.proxy_progress + ' %' : ''}`;
+        badge.title = '';
+        genBtn.disabled = true;
+    } else if (state === 'error') {
+        badge.className = 'raw-badge fail';
+        badge.textContent = 'Aperçu web : échec — relancer';
+        badge.title = item.proxy_error || '';
+        genBtn.textContent = 'Relancer l\'aperçu web';
+    } else {
+        badge.className = 'raw-badge';
+        badge.textContent = 'Format brut — Aperçu web à générer';
+        badge.title = '';
+        genBtn.textContent = 'Générer l\'aperçu web';
+    }
 }
 
 function openPlayer(name) {
@@ -4649,9 +6153,11 @@ function openPlayer(name) {
         image.removeAttribute('src');
         image.hidden = true;
         video.hidden = false;
-        video.src = mediaUrl(name);
+        video.src = mediaUrl(item.web_proxy || name);   // aperçu web si le brut n'est pas lisible
         video.play().catch(() => { /* lecture manuelle (restrictions navigateur) */ });
     }
+    byId('player-raw-hint').hidden = true;
+    updatePlayerRawHint(item);
     byId('player-notes').value = item.notes || '';
     renderPlayerStars(item.stars);
     byId('player-saved').classList.remove('show');
@@ -4668,6 +6174,7 @@ function closePlayer() {
     const image = byId('player-photo');
     image.removeAttribute('src');
     image.hidden = true;
+    byId('player-raw-hint').hidden = true;
     byId('player-card').hidden = true;
     currentMediaName = null;
     renderVideos();
@@ -4714,6 +6221,12 @@ function initMediaUI() {
         catch (error) { toast('Médiathèque : ' + error.message, 'err'); }
     });
     byId('btn-player-close').addEventListener('click', closePlayer);
+    byId('btn-player-gen-proxy').addEventListener('click', () => {
+        if (currentMediaName) generateWebProxy(currentMediaName);
+    });
+    byId('btn-player-vlc').addEventListener('click', () => {
+        if (currentMediaName) downloadMedia(currentMediaName);
+    });
     byId('player-saved').textContent = 'Enregistré';
     $$('#player-stars .star').forEach((star) => {
         star.addEventListener('click', () => {
@@ -4741,6 +6254,8 @@ async function init() {
     initTileGrid(TILE_GRIDS.params);
     initVideo();
     initHud();
+    initAutopilotBar();
+    initAlignSection();
     startPadReader();
     initPadTest();
     initSettingsButtons();
@@ -4748,6 +6263,7 @@ async function init() {
 
     try {
         await loadConfig();
+        initBobHid();
         fillSettings();
         applyTheme((CONFIG.interface && CONFIG.interface.theme) || 'dark', { local: true });
         applyCockpitFromConfig();
@@ -4758,6 +6274,7 @@ async function init() {
     byId('btn-ui-reset-tiles').addEventListener('click', resetTileOrders);
     loadVideoDevices().catch((error) => toast('Caméras : ' + error.message, 'err'));
     loadVideos().catch(() => { /* la médiathèque sera rechargée à l'ouverture de sa section */ });
+    pollStereo();                    // reprise d'un enregistrement 3D déjà en cours
 
     pollSystem();
     pollVideo();
