@@ -33,6 +33,7 @@
         <div class="topbar-right">
             <div class="status-badges">
                 <span id="badge-serial" class="badge badge-off" title="Liaison série ESP32-S3">SÉRIE ✕</span>
+                <span id="badge-arm" class="badge badge-off" title="Armement : conditionne les voies de propulsion 0-7 et le masque d'autopilote (§6.2)">DÉSARMÉ</span>
                 <span id="badge-video" class="badge badge-off" title="Flux caméras">VIDÉO 0/2</span>
                 <span id="badge-ws" class="badge badge-off" title="Télémétrie temps réel (étape 4)">TÉLÉMÉTRIE — ÉTAPE 4</span>
             </div>
@@ -151,6 +152,14 @@
                 <button type="button" data-src="cam1" class="seg-btn active" title="Caméra Gauche (Avant G) — flux de référence de la vue Avant">Avant G</button>
                 <button type="button" data-src="cam2" class="seg-btn" title="Caméra Droite (Avant D)">Avant D</button>
                 <button type="button" data-src="cam3" class="seg-btn" title="Caméra Arrière (assignez son périphérique dans Paramètres → Caméras)">Arrière</button>
+            </div>
+            <!-- Armement : la condition préalable à toute propulsion. Sans trame
+                 armée, le firmware force les canaux 0-7 au neutre (1500 µs) et
+                 ignore le masque d'assistances (PROTOCOLE_RPI5.md §6.2). -->
+            <div class="segmented" id="rov-arm" role="group" aria-label="Armement du ROV">
+                <button type="button" data-arm="0" class="seg-btn active" title="Désarmé : canaux 0-7 au neutre, autopilote ignoré — sorties ON/OFF et caméra restent pilotables">Désarmer</button>
+                <button type="button" data-arm="1" class="seg-btn" title="Armé : les 16 canaux et le masque d'autopilote sont appliqués — les hélices peuvent tourner">Armer</button>
+                <button type="button" data-arm="2" class="seg-btn" title="E-Stop : toutes les sorties en position de sécurité, sorties ON/OFF à OFF — priorité absolue (§6.2)">E-STOP</button>
             </div>
             <!-- Type d'autopilot du firmware BOB-CONTROL : masque d'assistances
                  superposables (0 = passif), appliqué par l'ESP32-S3 sur trames
@@ -275,6 +284,12 @@
                 <div class="hud-el" data-hud="temperature" style="left:82%;top:64.5%;width:15%;height:5.2%;--hud-o:0.92">
                     <canvas class="hud-canvas"></canvas>
                     <span class="hud-el-name">Température</span>
+                    <span class="hud-el-badge">92 %</span>
+                    <span class="hud-handle" title="Glisser pour redimensionner"></span>
+                </div>
+                <div class="hud-el" data-hud="arm_mode" style="left:0.5%;top:9%;width:24%;height:9%;--hud-o:0.92">
+                    <canvas class="hud-canvas"></canvas>
+                    <span class="hud-el-name">Armement &amp; autopilote</span>
                     <span class="hud-el-badge">92 %</span>
                     <span class="hud-handle" title="Glisser pour redimensionner"></span>
                 </div>
@@ -952,6 +967,9 @@
                 </label>
                 <label class="switch-label">Température de l'eau
                     <input type="checkbox" id="ovl-temperature" class="switch" checked>
+                </label>
+                <label class="switch-label">Armement &amp; autopilote
+                    <input type="checkbox" id="ovl-arm_mode" class="switch" checked>
                 </label>
                 <label class="switch-label">Moteurs M1–M8
                     <input type="checkbox" id="ovl-gauges" class="switch" checked>

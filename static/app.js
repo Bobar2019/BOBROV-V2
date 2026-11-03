@@ -272,6 +272,13 @@ function renderBadges() {
             serialBadge.textContent = 'SÉRIE ✕';
             serialBadge.title = serial.last_error || `En attente de ${serial.port || 'la liaison'}`;
         }
+        // L'armement affiché est resynchronisé sur l'état réellement commandé
+        // côté serveur (le badge reste juste après un rechargement de page).
+        const command = serial.command || {};
+        if (Number.isInteger(command.arm_state)) ARM_STATE.value = command.arm_state;
+        if (Number.isInteger(command.mode)) AUTOPILOT.mode = command.mode & 0x0F;
+        renderArmState();
+        renderAutopilotBar();
         setText(byId('app-version'), 'v' + (SYSTEM_STATUS.version || '—'));
     }
     const videoBadge = byId('badge-video');
@@ -815,6 +822,76 @@ function initAutopilotBar() {
             renderAutopilotBar();
         })
         .catch(() => { /* liaison série non prête : la barre reste sur passif */ });
+}
+
+/* -- Armement : la condition préalable à toute propulsion ------------------
+ * PROTOCOLE_RPI5.md §6.2 : arm_state 0 force les canaux 0-7 au neutre
+ * (1500 µs) et fait ignorer le masque d'assistances par le firmware ; 1
+ * applique les 16 voies et le mode ; 2 = E-Stop (toutes les sorties à la
+ * position de sécurité, priorité absolue). Sans armement, « Stabiliser » est
+ * donc sans effet : les jauges M1-M8 restent au neutre.
+ * L'état affiché est resynchronisé sur le serveur à chaque poll système. */
+
+const ARM_DISARMED = 0, ARM_ARMED = 1, ARM_ESTOP = 2;
+const ARM_LABELS = { 0: 'DÉSARMÉ', 1: 'ARMÉ', 2: 'E-STOP' };
+const ARM_STATE = { value: ARM_DISARMED };
+
+/** Envoie l'état d'armement au ROV (émission immédiate) puis rafraîchit l'UI. */
+async function setArmState(armState) {
+    try {
+        const data = await postJSON('/api/rov/arm', { arm_state: armState });
+        ARM_STATE.value = Number.isInteger(data.arm_state) ? data.arm_state : armState;
+    } catch (error) {
+        toast('Armement refusé : ' + error.message, 'err', 5200);
+        return;
+    }
+    renderArmState();
+    if (armState === ARM_ARMED) {
+        toast('ROV armé — propulsion et autopilote appliqués');
+    } else if (armState === ARM_ESTOP) {
+        toast('E-STOP : toutes les sorties en position de sécurité', 'err', 6000);
+    }
+}
+
+/** Bascule armé ↔ désarmé ; depuis l'E-Stop, ramène d'abord au neutre désarmé. */
+function toggleArmState() {
+    setArmState(ARM_STATE.value === ARM_DISARMED ? ARM_ARMED : ARM_DISARMED);
+}
+
+/** Reflet de l'état commandé : badge topbar + surbrillance des boutons. */
+function renderArmState() {
+    const badge = byId('badge-arm');
+    if (badge) {
+        badge.textContent = ARM_LABELS[ARM_STATE.value] || '—';
+        badge.className = 'badge ' + (ARM_STATE.value === ARM_ARMED ? 'badge-ok'
+            : ARM_STATE.value === ARM_ESTOP ? 'badge-danger' : 'badge-off');
+        badge.title = ARM_STATE.value === ARM_ARMED
+            ? 'Armé : les 16 canaux et le masque d\'autopilote sont appliqués (§6.2)'
+            : ARM_STATE.value === ARM_ESTOP
+                ? 'E-Stop : tout à la position de sécurité, sorties ON/OFF à OFF'
+                : 'Désarmé : canaux 0-7 au neutre, autopilote ignoré';
+    }
+    const group = byId('rov-arm');
+    if (!group) return;
+    $$('[data-arm]', group).forEach((button) => {
+        button.classList.toggle('active', Number(button.dataset.arm) === ARM_STATE.value);
+    });
+}
+
+function initArmControls() {
+    const group = byId('rov-arm');
+    if (group) {
+        $$('[data-arm]', group).forEach((button) => {
+            button.addEventListener('click', () => setArmState(Number(button.dataset.arm)));
+        });
+    }
+    renderArmState();
+    getJSON('/api/rov/arm')
+        .then((data) => {
+            ARM_STATE.value = Number.isInteger(data.arm_state) ? data.arm_state : ARM_DISARMED;
+            renderArmState();
+        })
+        .catch(() => { /* liaison série non prête : l'état reste sur désarmé */ });
 }
 
 /** Applique la disposition à la scène (classes, rôles des panneaux) + variables CSS du PIP. */
@@ -1746,8 +1823,8 @@ function capturePhoto() {
  *       pincement + rotation), voies restantes 11-16, batterie et courants.
  * ========================================================================= */
 
-const HUD_ORDER = ['horizon', 'heading', 'depth', 'temperature', 'gauges', 'grip', 'aux',
-                   'voltage', 'motor_v', 'motor_h'];
+const HUD_ORDER = ['horizon', 'heading', 'depth', 'temperature', 'arm_mode', 'gauges', 'grip',
+                   'aux', 'voltage', 'motor_v', 'motor_h'];
 const HUD_COLOR = '#00d9ff';
 const HUD_WARN = '#ffb300';
 const HUD_DANGER = '#ff2d2d';     // virage rouge de la jauge de profondeur
@@ -1766,6 +1843,7 @@ const HUD_DEFAULT_LAYOUT = {
     depth:   { x: 82,   y: 8,    w: 15,   h: 56,  opacity: 0.92, color: HUD_COLOR, weight: 1, font: 1,
                max: 100 },   // « max » : profondeur max de la jauge (m) — échelle et alarmes
     temperature: { x: 82, y: 64.5, w: 15,  h: 5.2, opacity: 0.92, color: HUD_COLOR, weight: 1, font: 1 },
+    arm_mode: { x: 0.5, y: 9,    w: 24,   h: 9,   opacity: 0.92, color: HUD_COLOR, weight: 1, font: 1 },
     gauges:  { x: 0.5,  y: 56,   w: 26,   h: 25,  opacity: 0.92, color: HUD_COLOR, weight: 1, font: 1 },
     grip:    { x: 27,   y: 56,   w: 12.5, h: 8.5, opacity: 0.92, color: HUD_COLOR, weight: 1, font: 1 },
     aux:     { x: 27,   y: 65.5, w: 12.5, h: 27,  opacity: 0.92, color: HUD_COLOR, weight: 1, font: 1 },
@@ -2006,6 +2084,19 @@ function hudText(c, text, x, y, size, align = 'left', color = hudStroke) {
     c.textBaseline = 'middle';
     c.fillStyle = color;
     c.fillText(text, x, y);
+}
+
+/** Réduit la taille d'un texte jusqu'à ce qu'il tienne dans ``maxW`` pixels.
+    Retourne une valeur à passer à ``hudText`` (le facteur « Taille des textes »
+    de l'élément en est donc retiré, puis réappliqué par ``hudText``). */
+function hudFitTextSize(c, text, maxSize, maxW) {
+    let size = maxSize;
+    while (size > 7) {
+        c.font = '600 ' + size.toFixed(1) + 'px ' + HUD_MONO;
+        if (c.measureText(text).width <= maxW) break;
+        size -= 1;
+    }
+    return size / hudFont;
 }
 
 /** Cadre le canvas sur la taille CSS de l'élément (net sur écran HiDPI). */
@@ -2277,6 +2368,43 @@ function hudDrawTemperature(c, w, h, f) {
     c.save();
     hudGlow(c, true, hudStroke, 6);
     hudText(c, 'T ' + f.temperature.toFixed(1).replace('.', ',') + ' °C', 4, h / 2, size, 'left');
+    c.restore();
+}
+
+/* -- Armement et type d'autopilote ------------------------------------------
+ * Texte d'état, élément autonome réglable dans « Mise en page ». Il lit les
+ * grandeurs commandées (ARM_STATE, AUTOPILOT) et non HUD.view : celui-ci ne
+ * lisse que les mesures de vol issues de la télémétrie. */
+
+/** Libellés courts du masque d'assistances, dans l'ordre de priorité du §6.2. */
+const HUD_ASSIST_LABELS = [['surface', 'SURFACE'], ['rt', 'STAB'],
+                           ['depth', 'PROF'], ['cap', 'CAP']];
+
+/** Type d'autopilote courant : assistances actives additionnées, sinon PASSIF. */
+function hudAutopilotLabel() {
+    const active = HUD_ASSIST_LABELS.filter(([key]) => AUTOPILOT.mode & ASSIST_BITS[key])
+        .map(([, label]) => label);
+    return active.length ? active.join(' + ') : 'PASSIF';
+}
+
+/** Armement (ligne 1) + type d'autopilote (ligne 2). */
+function hudDrawArmMode(c, w, h) {
+    const arm = ARM_STATE.value;
+    const armed = arm === ARM_ARMED;
+    // Vert n'existe pas dans la palette collimateur : l'élément garde sa couleur
+    // quand il est armé, vire à l'ambre désarmé et au rouge en E-Stop.
+    const armColor = armed ? hudStroke : (arm === ARM_ESTOP ? HUD_DANGER : HUD_WARN);
+    const mode = hudAutopilotLabel();
+    const pad = Math.max(3, Math.round(w * 0.02));
+    c.save();
+    const size = hudFitTextSize(c, mode, hudClamp(h * 0.34, 9, 20), w - pad * 2);
+    hudGlow(c, true, armColor, 6);
+    hudText(c, ARM_LABELS[arm] || ARM_LABELS[ARM_DISARMED], pad, h * 0.3, size, 'left', armColor);
+    // §6.2 : hors armement le firmware ignore le masque — la ligne 2 est estompée
+    // pour rappeler qu'elle n'est qu'une consigne, pas un effet réel.
+    hudGlow(c, true, hudStroke, 6);
+    c.globalAlpha = armed ? 1 : 0.45;
+    hudText(c, mode, pad, h * 0.72, size, 'left');
     c.restore();
 }
 
@@ -2739,6 +2867,7 @@ Object.assign(HUD_DRAW, {
     heading: hudDrawHeading,
     depth: hudDrawDepth,
     temperature: hudDrawTemperature,
+    arm_mode: hudDrawArmMode,
     gauges: hudDrawMotors,
     grip: hudDrawGrip,
     aux: hudDrawAux,
@@ -4390,6 +4519,8 @@ function requestHeadTrackerTare() {
 
 /** Actions du poste exécutables dans le navigateur : id → fonction. */
 const PAD_TRIGGERS = {
+    arm_toggle: () => toggleArmState(),       // Armement : bascule armé ↔ désarmé
+    estop: () => setArmState(ARM_ESTOP),      // E-Stop : priorité absolue (§6.2)
     rec: () => toggleRecording(false),        // REC brut : flux caméra sans HUD
     rec_view: () => toggleRecording(true),    // REC vue : caméra principale + HUD
     rec_3d: () => toggleStereoRecording(),    // REC 3D : bascule du double flux stéréo
@@ -6254,6 +6385,7 @@ async function init() {
     initTileGrid(TILE_GRIDS.params);
     initVideo();
     initHud();
+    initArmControls();
     initAutopilotBar();
     initAlignSection();
     startPadReader();

@@ -143,6 +143,7 @@ body {
 .badge-ok    { background: rgba(0, 230, 118, 0.15); color: var(--success); border: 1px solid var(--success); }
 .badge-off   { background: var(--panel-faint); color: var(--text-dim); border: 1px solid var(--border-subtle); }
 .badge-warn  { background: rgba(255, 179, 0, 0.12); color: var(--warning); border: 1px solid var(--warning); }
+.badge-danger { background: color-mix(in srgb, var(--danger) 15%, transparent); color: var(--danger); border: 1px solid var(--danger); }
 .badge-real  { background: rgba(0, 217, 255, 0.12); color: var(--accent-cyan); border: 1px solid var(--accent-cyan); }
 
 .theme-toggle {
@@ -527,6 +528,20 @@ output {
 .seg-btn:last-child { border-right: none; }
 .seg-btn:hover { background: var(--panel-faint); color: var(--text-primary); }
 .seg-btn.active { background: rgba(0, 217, 255, 0.14); color: var(--accent-cyan); font-weight: 600; }
+
+/* Armement : l'état se lit à la couleur — ARMÉ en vert, E-Stop en rouge plein,
+   dans les deux thèmes. La sécurité prime sur l'harmonie de la barre. */
+#rov-arm .seg-btn[data-arm="1"].active {
+    background: color-mix(in srgb, var(--success) 18%, transparent);
+    color: var(--success);
+}
+#rov-arm .seg-btn[data-arm="2"] { color: var(--danger); }
+#rov-arm .seg-btn[data-arm="2"]:hover { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+#rov-arm .seg-btn[data-arm="2"].active {
+    background: var(--danger);
+    color: #fff;
+    font-weight: 700;
+}
 
 /* Liste de périphériques */
 .device-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 8px; }
