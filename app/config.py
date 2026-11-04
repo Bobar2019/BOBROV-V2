@@ -144,6 +144,35 @@ DEFAULTS: dict = {
                  "source": None},
             ],
         },
+        # Contrôle Simulateur 3D (section MANETTE → cadre du même nom) : mêmes
+        # sources que ci-dessus, mais pour la scène Tidewater seule — axes du vol
+        # libre (surge/sway/heave/yaw/pitch) et quatre commandes de vue. Le bloc
+        # est semé à sa création avec les axes de déplacement du cockpit
+        # (_seed_sim_gamepad), puis vit sa vie : ceux du cockpit ne pilotent que
+        # le maillage du ROV.
+        "sim_gamepad": {
+            "enabled": True,
+            "actions": [
+                {"id": "surge", "label": "Caméra libre — avancer / reculer",
+                 "sources": []},
+                {"id": "sway", "label": "Caméra libre — latéral gauche / droite",
+                 "sources": []},
+                {"id": "heave", "label": "Caméra libre — monter / descendre",
+                 "sources": []},
+                {"id": "yaw", "label": "Caméra libre — pivoter gauche / droite",
+                 "sources": []},
+                {"id": "pitch", "label": "Caméra libre — regarder haut / bas",
+                 "sources": []},
+                {"id": "sim_cam_free", "label": "Caméra libre — entrer / sortir",
+                 "sources": []},
+                {"id": "sim_view_internal", "label": "Vue interne du ROV — embarquer",
+                 "sources": []},
+                {"id": "sim_cam_chase", "label": "Caméra de suivi du ROV — accrocher / relâcher",
+                 "sources": []},
+                {"id": "sim_light", "label": "Projecteurs du ROV — on / off",
+                 "sources": []},
+            ],
+        },
         # BOB BL AR : source d'orientation BLE routable vers une action axe
         # existante. Aucune destination matérielle n'est imposée ici.
         "head_tracker": {
@@ -236,6 +265,70 @@ class ConfigError(Exception):
 # Helpers internes
 # ---------------------------------------------------------------------------
 
+# Voies historiques de la manette du cockpit → fonctions nommées, mêmes
+# correspondances que dans static/app.js (PAD_LEGACY_IDS).
+GAMEPAD_LEGACY_IDS = {
+    "voie1": "surge", "voie2": "sway", "voie3": "heave",
+    "voie4": "yaw", "voie5": "roll", "voie6": "pitch",
+}
+
+
+def _pad_sources(action: dict) -> list:
+    """Sources d'une action, format courant (`sources`) ou hérité (`source`)."""
+    sources = action.get("sources")
+    if isinstance(sources, list):
+        return [item for item in sources if _valid_source(item)]
+    source = action.get("source")
+    return [source] if _valid_source(source) else []
+
+
+def _seed_sim_gamepad(raw: dict) -> None:
+    """Crée `input.sim_gamepad` en clonant les axes de déplacement du cockpit.
+
+    Appelée une seule fois : dès que le bloc existe dans le fichier (semé ici ou
+    édité dans l'interface), il n'est plus touché. Les axes repris sont ceux qui
+    font voler la caméra libre ; les quatre commandes de vue du simulateur
+    restent à assigner, à dessein.
+    """
+    inp = raw.get("input")
+    if not isinstance(inp, dict) or "sim_gamepad" in inp:
+        return
+    cockpit = inp.get("gamepad") if isinstance(inp.get("gamepad"), dict) else {}
+    actions = cockpit.get("actions") if isinstance(cockpit.get("actions"), list) else []
+    by_id: dict = {}
+    for action in actions:
+        if not isinstance(action, dict) or not isinstance(action.get("id"), str):
+            continue
+        by_id[GAMEPAD_LEGACY_IDS.get(action["id"], action["id"])] = _pad_sources(action)
+    seeded = []
+    for entry in DEFAULTS["input"]["sim_gamepad"]["actions"]:
+        seeded.append({"id": entry["id"], "label": entry["label"],
+                       "sources": copy.deepcopy(by_id.get(entry["id"], []))})
+    inp["sim_gamepad"] = {"enabled": True, "actions": seeded}
+    log.info("input.sim_gamepad semé avec les axes de déplacement du cockpit")
+
+
+def _validate_pad_block(block: dict, name: str) -> None:
+    """Valide un bloc de manette : `enabled` + actions `{id, label, sources}`."""
+    _require(isinstance(block, dict), f"input.{name} : objet attendu")
+    _require(isinstance(block.get("enabled"), bool), f"input.{name}.enabled : booléen attendu")
+    _require(isinstance(block.get("actions"), list), f"input.{name}.actions : liste attendue")
+    for action in block["actions"]:
+        _require(isinstance(action, dict) and isinstance(action.get("id"), str) and action["id"].strip() != "",
+                 f"input.{name}.actions[] : objet {{id, label, sources}} attendu")
+        _require(isinstance(action.get("label"), str),
+                 f"input.{name}.actions[{action['id']}].label : chaîne attendue")
+        source = action.get("source")                       # format hérité : une seule source
+        _require(source is None or _valid_source(source),
+                 f"input.{name}.actions[{action['id']}].source : "
+                 "{type: axis|button, index: 0-64, invert: bool} attendu")
+        sources = action.get("sources")                     # format courant : une source par manette
+        _require(sources is None
+                 or (isinstance(sources, list) and all(_valid_source(item) for item in sources)),
+                 f"input.{name}.actions[{action['id']}].sources : liste de "
+                 "{type: axis|button, index: 0-64, invert: bool, pad: nom de manette} attendue")
+
+
 def _migrate(raw: dict) -> dict:
     """Migrations douces des anciennes clés (fichier utilisateur conservé).
 
@@ -268,6 +361,7 @@ def _migrate(raw: dict) -> dict:
             cam = cams.get(cam_name)
             device = cam.get("device") if isinstance(cam, dict) else None
             stereo[side] = str(device).strip() or DEFAULTS["cameras"][cam_name]["device"]
+    _seed_sim_gamepad(raw)
     return raw
 
 
@@ -402,22 +496,8 @@ def _validate(cfg: dict) -> None:
                  "input.head_tracker.routes[] : objet {axis: 0-64, action: texte, invert: bool} attendu")
 
     gamepad = inp["gamepad"]
-    _require(isinstance(gamepad["enabled"], bool), "input.gamepad.enabled : booléen attendu")
-    _require(isinstance(gamepad["actions"], list), "input.gamepad.actions : liste attendue")
-    for action in gamepad["actions"]:
-        _require(isinstance(action, dict) and isinstance(action.get("id"), str) and action["id"].strip() != "",
-                 "input.gamepad.actions[] : objet {id, label, sources} attendu")
-        _require(isinstance(action.get("label"), str),
-                 f"input.gamepad.actions[{action['id']}].label : chaîne attendue")
-        source = action.get("source")                       # format hérité : une seule source
-        _require(source is None or _valid_source(source),
-                 f"input.gamepad.actions[{action['id']}].source : "
-                 "{type: axis|button, index: 0-64, invert: bool} attendu")
-        sources = action.get("sources")                     # format courant : une source par manette
-        _require(sources is None
-                 or (isinstance(sources, list) and all(_valid_source(item) for item in sources)),
-                 f"input.gamepad.actions[{action['id']}].sources : liste de "
-                 "{type: axis|button, index: 0-64, invert: bool, pad: nom de manette} attendue")
+    _validate_pad_block(gamepad, "gamepad")
+    _validate_pad_block(inp["sim_gamepad"], "sim_gamepad")
 
     ar = cfg["ar_glasses"]
     _require(isinstance(ar["enabled"], bool), "ar_glasses.enabled : booléen attendu")
@@ -529,6 +609,9 @@ class ConfigManager:
         with self._lock:
             created = not self._path.exists()
             raw: dict = {}
+            # copie du fichier tel qu'il était lu : une migration qui le modifie en place
+            # (semis de input.sim_gamepad, par exemple) doit être écrite sur le disque
+            before: dict = {}
             if not created:
                 try:
                     raw = json.loads(self._path.read_text(encoding="utf-8"))
@@ -536,9 +619,10 @@ class ConfigManager:
                     raise ConfigError(f"lecture de {self._path} impossible : {exc}") from exc
                 if not isinstance(raw, dict):
                     raise ConfigError(f"{self._path} : la racine doit être un objet JSON")
+                before = copy.deepcopy(raw)
             merged = _deep_merge(DEFAULTS, _migrate(raw))
             _validate(merged)
-            if created or merged != raw:
+            if created or merged != before:
                 self._write(merged)
                 log.info("config.json %s (%s)",
                          "généré depuis les défauts" if created else "complété avec les clés manquantes",

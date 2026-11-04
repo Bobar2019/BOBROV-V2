@@ -7,12 +7,13 @@ import { SceneLighting } from './SceneLighting.js';
 
 // Local lights (lanterns, lamp posts, path lights, lit windows, the ROV's projectors, the handheld
 // flashlight) without a light object per lamp: unrolling every light into every
-// material would multiply shader size and compile time. Instead the CPU picks the
-// MAX lights nearest the camera each frame and packs them into three small uniform arrays; every
-// lit material evaluates them in ONE loop (the physical BRDF: diffuse + GGX
-// specular), inverse-square falloff with a smooth range window, optional spot cone, no shadows.
-// Skipped entirely (uniform loop bound) when no light is active (daytime without the flashlight).
-// They bypass the sun-only terms of the direct light (clouds, caustics, contact shadows).
+// material would multiply shader size and compile time. Instead the CPU packs a few of them into
+// three small uniform arrays each frame — the switched spots first (the ROV's projectors), then the
+// lamps nearest the camera — and every lit material evaluates them in ONE loop (the physical BRDF:
+// diffuse + GGX specular), inverse-square falloff with a smooth range window, optional spot cone, no
+// shadows. Skipped entirely (uniform loop bound) when nothing is lit (daytime without the flashlight
+// or the projectors). They bypass the sun-only terms of the direct light (clouds, caustics, contact
+// shadows).
 //
 // WGSL: `localLightsModule` (prefix localLights) installs the `localLights` lighting hook and exposes
 //   uniforms localLights.{ pos[ 8 ], col[ 8 ], dir[ 8 ], count, flashOn, flashPos, flashDir, flashCol, flashCone }
@@ -116,8 +117,11 @@ const smooth = ( x, a, b ) => {
 };
 
 // CPU side: sources and the flashlight, packed every frame.
-//   add( { position (live Vector3), color, intensity, range, dir?, cosInner?, cosOuter?, kind, flicker? } )
+//   add( { position (live Vector3), color, intensity, range, dir?, cosInner?, cosOuter?, kind, flicker?,
+//          nightOnly?, priority?, update? } )
 //   intensity: luminous intensity in scene units (illuminance at 1 m); range: cut-off distance (m)
+//   nightOnly = false: the source is switched (the ROV's projectors), not scheduled with the dusk
+//   priority = true: the source keeps a slot in the pool whatever else is lit (see update)
 export class LocalLights {
 
 	constructor() {
@@ -131,7 +135,8 @@ export class LocalLights {
 			cosInner: Math.cos( THREE.MathUtils.degToRad( 9 ) ), cosOuter: Math.cos( THREE.MathUtils.degToRad( 35 ) ),
 			position: new THREE.Vector3(), dir: new THREE.Vector3( 0, 0, - 1 ), primed: false,
 		};
-		this._list = [];
+		this._prio = [];
+		this._dusk = [];
 		this.time = 0;
 		this.active = 0;
 
@@ -190,39 +195,52 @@ export class LocalLights {
 
 		}
 
-		// lamps: on from dusk (same ramp as the lantern glass), nearest first
-		const on = smooth( G.night.value, 0.15, 0.75 ) * this.strength;
-		if ( on > 0.002 && this.enabled ) {
+		// lamps: on from dusk (same ramp as the lantern glass), nearest first. A source flagged
+		// nightOnly = false keeps its own switch in broad daylight: the ROV's projectors are lamps of
+		// the vehicle, not of the village, and the sun must not be what turns them off.
+		const night = smooth( G.night.value, 0.15, 0.75 ) * this.strength;
+		if ( this.enabled ) {
 
 			const cp = camera.position;
-			const list = this._list;
-			list.length = 0;
+			const prio = this._prio;
+			const dusk = this._dusk;
+			prio.length = 0;
+			dusk.length = 0;
 			for ( const s of this.sources ) {
 
 				if ( s.enabled === false ) continue;
 				if ( s.update ) s.update();
 				s.d2 = s.position.distanceToSquared( cp );
-				list.push( s );
+				( s.nightOnly === false ? prio : dusk ).push( s );
 
 			}
 
-			list.sort( ( a, b ) => a.d2 - b.d2 );
-			const slots = MAX - n;
-			// fade out the farthest selected lights as they approach the cut (no popping)
-			const dCut = list.length > slots ? Math.sqrt( list[ slots ].d2 ) : Infinity;
-			for ( let i = 0; i < Math.min( slots, list.length ); i ++ ) {
+			// the switched spots first, at full strength, daylight or not: the ROV's projectors
+			const room = MAX - n;
+			const keep = Math.min( prio.length, room );
+			for ( let i = 0; i < keep; i ++ ) {
 
-				const s = list[ i ];
-				const fade = Number.isFinite( dCut ) ? smooth( Math.sqrt( s.d2 ), dCut, dCut * 0.8 ) : 1;
-				const fl2 = s.flicker ? 1 + s.flicker * Math.sin( this.time * 9 + s.phase ) * Math.sin( this.time * 5.3 + s.phase * 0.37 ) : 1;
-				const k = s.intensity * on * fade * fl2 * ( s.scale ?? 1 );
-				if ( k <= 1e-4 ) continue;
-				const r = s.range;
-				pos[ n ].set( s.position.x, s.position.y, s.position.z, r * r );
-				col[ n ].set( s.color.r * k, s.color.g * k, s.color.b * k, s.cosInner ?? - 1.5 );
-				if ( s.dir ) dir[ n ].set( s.dir.x, s.dir.y, s.dir.z, s.cosOuter ?? - 2 );
-				else dir[ n ].set( 0, - 1, 0, - 2 );
-				n ++;
+				const s = prio[ i ];
+				const k = s.intensity * ( s.scale ?? 1 );
+				if ( k > 1e-4 ) packSlot( pos, col, dir, n ++, s, k );
+
+			}
+
+			// then the dusk lamps, nearest first, faded out as they approach the cut (no popping)
+			const slots = room - keep;
+			if ( night > 0.002 && slots > 0 && dusk.length ) {
+
+				dusk.sort( ( a, b ) => a.d2 - b.d2 );
+				const dCut = dusk.length > slots ? Math.sqrt( dusk[ slots ].d2 ) : Infinity;
+				for ( let i = 0; i < Math.min( slots, dusk.length ); i ++ ) {
+
+					const s = dusk[ i ];
+					const fade = Number.isFinite( dCut ) ? smooth( Math.sqrt( s.d2 ), dCut, dCut * 0.8 ) : 1;
+					const fl2 = s.flicker ? 1 + s.flicker * Math.sin( this.time * 9 + s.phase ) * Math.sin( this.time * 5.3 + s.phase * 0.37 ) : 1;
+					const k = s.intensity * night * fade * fl2 * ( s.scale ?? 1 );
+					if ( k > 1e-4 ) packSlot( pos, col, dir, n ++, s, k );
+
+				}
 
 			}
 
@@ -235,9 +253,98 @@ export class LocalLights {
 
 }
 
-// The ROV's two projectors, one spot per lens at model.lampAnchors: cool white, thrown forward and
-// slightly down in the frame, switched with the lens material (RovModel.setLights).
-const LAMP_DIR = new THREE.Vector3( 0, - 0.28, 1 ).normalize();
+// One slot of the pool: position + range^2, colour x intensity + cos(inner cone), spot axis +
+// cos(outer cone). `dir` absent = point light (outer cone -2), no inner cone = -1.5.
+function packSlot( pos, col, dir, i, s, k ) {
+
+	const r = s.range;
+	pos[ i ].set( s.position.x, s.position.y, s.position.z, r * r );
+	col[ i ].set( s.color.r * k, s.color.g * k, s.color.b * k, s.cosInner ?? - 1.5 );
+	if ( s.dir ) dir[ i ].set( s.dir.x, s.dir.y, s.dir.z, s.cosOuter ?? - 2 );
+	else dir[ i ].set( 0, - 1, 0, - 2 );
+
+}
+
+// A spot light in the pool, with the shape three.js gives it (position, target, intensity,
+// distance, angle, penumbra) so the numbers read the same as in a three scene. `angle` is the
+// HALF-angle of the cone, as on THREE.SpotLight; `penumbra` softens the edge (0 = hard rim,
+// 1 = the whole cone fades from the axis). `distance` is the cut-off range.
+// The light follows an Object3D: `mount()` puts the optics at `anchor` and aims through `aim`, both
+// in that object's own frame, so an aim point far ahead keeps the beam on the vehicle's own +Z
+// without touching the mesh it hangs off.
+export class SpotLight {
+
+	constructor( { color = 0xffffff, intensity = 1, distance = 30, angle = Math.PI / 6, penumbra = 0.3 } = {} ) {
+
+		this.position = new THREE.Vector3(); // optics, world (refreshed by update())
+		this.target = new THREE.Vector3();   // aim point, world
+		this.dir = new THREE.Vector3( 0, 0, 1 );
+		this.color = new THREE.Color( color );
+		this.intensity = intensity;
+		this.range = distance;
+		this.angle = angle;
+		this.penumbra = penumbra;
+		this.cosOuter = Math.cos( angle );
+		this.cosInner = Math.cos( angle * ( 1 - Math.min( penumbra, 0.95 ) ) );
+		this.kind = 'spot';
+		this.on = true;
+		this.nightOnly = false; // a switch, not a dusk lamp
+		this.priority = true;   // keeps its slot in the pool whatever else is lit
+		this.parent = null;
+		this.anchor = new THREE.Vector3();
+		this.aim = new THREE.Vector3( 0, 0, 1 );
+		this._switch = null;
+
+	}
+
+	// on / off: set `on` directly, or follow another state with a callback
+	// (the ROV's projectors read RovModel.lightsOn, so the lens and the beam cannot disagree)
+	switchTo( read ) {
+
+		this._switch = read;
+		return this;
+
+	}
+
+	get enabled() {
+
+		return this._switch ? !! this._switch() : this.on;
+
+	}
+
+	mount( parent, anchor, aim ) {
+
+		this.parent = parent;
+		this.anchor.copy( anchor );
+		this.aim.copy( aim );
+		this.update();
+		return this;
+
+	}
+
+	update() {
+
+		const p = this.parent;
+		if ( ! p ) return;
+		p.updateWorldMatrix( true, false );
+		this.position.copy( this.anchor ).applyMatrix4( p.matrixWorld );
+		this.target.copy( this.aim ).applyMatrix4( p.matrixWorld );
+		this.dir.copy( this.target ).sub( this.position ).normalize();
+
+	}
+
+}
+
+// The ROV's two projectors: one spot per lens, at the coordinates of the optics (model.lampAnchors),
+// a cold white thrown straight ahead along the vehicle's own +Z. The mesh of projecteur.glb is left
+// exactly as the CAD assembly exported it — the beam is aimed by its target, never by a rotation.
+// Narrow and strong on purpose: a pool of light on the bottom, not a glow around the lenses.
+const PROJECTOR = {
+	color: 0xdfeaff, intensity: 150, distance: 60,
+	angle: Math.PI / 6, // half-angle: a 60 deg cone, as THREE.SpotLight counts it
+	penumbra: 0.4,      // hot centre, soft rim on the sand
+	ahead: 60,          // aim point (m) on the local +Z axis: far enough to be a direction
+};
 
 export function addRovLights( lights, model ) {
 
@@ -245,25 +352,10 @@ export function addRovLights( lights, model ) {
 	const out = [];
 	for ( const local of model.lampAnchors ) {
 
-		const src = {
-			position: new THREE.Vector3(), color: new THREE.Color( 0.80, 0.90, 1.0 ), intensity: 2.4, range: 26, kind: 'rovLamp',
-			dir: new THREE.Vector3(), cosInner: 0.60, cosOuter: 0.10,
-			// the lenses and the beams come on together
-			get enabled() {
-
-				return model.lightsOn;
-
-			},
-			update() {
-
-				obj.updateWorldMatrix( true, false );
-				this.position.copy( local ).applyMatrix4( obj.matrixWorld );
-				this.dir.copy( LAMP_DIR ).transformDirection( obj.matrixWorld );
-
-			},
-		};
-		src.update();
-		out.push( lights.add( src ) );
+		const spot = new SpotLight( PROJECTOR );
+		spot.switchTo( () => model.lightsOn );         // the lenses and the beams come on together
+		const aim = local.clone().setZ( local.z + PROJECTOR.ahead );
+		out.push( lights.add( spot.mount( obj, local, aim ) ) );
 
 	}
 

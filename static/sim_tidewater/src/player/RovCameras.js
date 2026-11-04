@@ -6,10 +6,13 @@ const _q = new THREE.Quaternion();
 const _look = new THREE.Quaternion();
 const _e = new THREE.Euler( 0, 0, 0, 'YXZ' );
 const _flip = new THREE.Quaternion().setFromAxisAngle( new THREE.Vector3( 0, 1, 0 ), Math.PI );
+const _m = new THREE.Matrix4();
+const _s = new THREE.Vector3();
 
-// The ROV's onboard camera, Caméra Interne: FPV at model.eye, looking where the frame points, with
-// a limited look-around that recentres when the mouse rests. Caméra Libre (the free flight around
-// the frame, the default) is the engine's FlyCamera; freePose() below gives it its entry pose.
+// The ROV's three eyes. Caméra Interne: FPV at model.eye, looking where the frame points, with a
+// limited look-around that recentres when the mouse rests. Caméra Libre (the free flight around the
+// frame, the default) is the engine's FlyCamera; freePose() below gives it its entry pose. Caméra de
+// suivi: the eye stays where the free flight left it, bolted to the hull — see setMode / chase.
 //
 // The camera object itself is never re-parented: the engine's camera is shared with the water
 // queries and the post chain, all of which read its world position. Instead the rig writes the
@@ -20,21 +23,51 @@ export class RovCameras {
 
 		this.camera = camera;
 		this.input = input;
-		this.mode = 'free'; // 'free' (FlyCamera) | 'internal' (FPV)
+		this.mode = 'free'; // 'free' (FlyCamera) | 'internal' (FPV) | 'chase' (bolted to the hull)
 
 		this.lookYaw = 0; // look-around, relative to the frame
 		this.lookPitch = 0;
+		this._chaseLocal = null; // the eye in the frame's own axes, latched on entering 'chase'
 
 	}
 
-	setMode( mode ) {
+	setMode( mode, rov ) {
 
 		this.mode = mode;
 		this.lookYaw = this.lookPitch = 0;
+		if ( mode === 'chase' ) this.latch( rov );
+
+	}
+
+	/**
+	 * Where the eye sits in the frame's own space, right now: inverse(frame world) × camera world.
+	 * Captured when the mode is entered, so the shot the pilot had lined up in the free flight is
+	 * the one he keeps — the controls then go back to the frame and the eye rides along with it.
+	 */
+	latch( rov ) {
+
+		const g = rov && rov.model && rov.model.group;
+		if ( ! g ) return;
+		// the camera's matrixWorld is only written at render time: without this refresh the latch
+		// would capture the pose of the frame before the one on screen
+		this.camera.updateMatrixWorld( true );
+		g.updateMatrixWorld( true );
+		this._chaseLocal = ( this._chaseLocal || new THREE.Matrix4() )
+			.copy( g.matrixWorld ).invert().multiply( this.camera.matrixWorld );
 
 	}
 
 	update( dt, rov ) {
+
+		// Caméra de suivi: nothing to aim and nothing to recentre, the hull does the driving — the
+		// mouse is only drained, so the look-around does not jump when the pilot gets the eye back
+		if ( this.mode === 'chase' ) {
+
+			this.input.consumeLook();
+			this.chase( rov );
+			return;
+
+		}
 
 		const look = this.input.consumeLook();
 		const moved = Math.abs( look.x ) + Math.abs( look.y ) > 0.5;
@@ -58,6 +91,19 @@ export class RovCameras {
 		_e.set( this.lookPitch, this.lookYaw, 0, 'YXZ' );
 		_q.copy( rov.quaternion ).multiply( _flip ).multiply( _look.setFromEuler( _e ) );
 		this.camera.quaternion.copy( _q );
+
+	}
+
+	// The frame's own axes × the latched offset: same hull, same roll, same heading, no damping and
+	// no lag — a rig bolt, not a spring. rovCtl.apply() has already refreshed the group's matrixWorld
+	// this frame, so the eye is placed on the pose being simulated, not on the one before it.
+	chase( rov ) {
+
+		if ( ! this._chaseLocal ) return;
+		const g = rov.model.group;
+		g.updateMatrixWorld( true );
+		_m.multiplyMatrices( g.matrixWorld, this._chaseLocal );
+		_m.decompose( this.camera.position, this.camera.quaternion, _s );
 
 	}
 

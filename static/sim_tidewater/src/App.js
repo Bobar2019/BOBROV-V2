@@ -521,7 +521,9 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 		} else if ( this.rovActive ) {
 
-			this.rovCams.setMode( 'internal' );
+			// the frame keeps the controls either way; only an eye that was let loose (the free flight)
+			// has to come back aboard — a rig the pilot picked, Caméra Interne or caméra de suivi, stays
+			if ( this.rovCams.mode === 'free' ) this.rovCams.setMode( 'internal' );
 
 		} else {
 
@@ -534,7 +536,8 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 	// ---------------------------------------------------------------- ROV
 
 	// E at the frame (or the context menu): the pilot takes the ROV. `camera` is where to look from
-	// once aboard — Caméra Libre by default, Caméra Interne when the menu asks to dive straight in.
+	// once aboard — Caméra Libre by default, Caméra Interne when the menu asks to dive straight in,
+	// caméra de suivi when the pad's « Caméra de suivi » button asks for the shot.
 	enterRov( camera = 'free' ) {
 
 		if ( this.rovActive ) return;
@@ -544,7 +547,9 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		// where to put the walker back when he steps out (if the frame is still within reach)
 		this._onFoot = { mode: p.mode, position: p.position.clone(), yaw: p.yaw, pitch: p.pitch };
 		this.setRovCamera( camera );
-		if ( this.ui ) this.ui.ui.toast( camera === 'internal' ? 'ROV · caméra interne' : 'ROV · caméra libre   —   clic droit pour plonger' );
+		if ( this.ui ) this.ui.ui.toast( camera === 'internal' ? 'ROV · caméra interne'
+			: camera === 'chase' ? 'ROV · caméra de suivi'
+			: 'ROV · caméra libre   —   clic droit pour plonger' );
 
 	}
 
@@ -587,8 +592,9 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 
 	}
 
-	// 'internal' (Caméra Interne: onboard, the keys drive the frame) or 'free' (Caméra Libre, the
-	// free flight around it). Asking for one of them from the pier takes the ROV first.
+	// 'internal' (Caméra Interne: onboard, the keys drive the frame), 'free' (Caméra Libre, the free
+	// flight around it) or 'chase' (Caméra de suivi: the eye bolted to the hull where the free flight
+	// left it). Asking for one of them from the pier takes the ROV first.
 	setRovCamera( mode ) {
 
 		if ( ! this.rovActive ) {
@@ -603,7 +609,41 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 			this.rovCams.setMode( 'internal' );
 			this.setFreeCam( false );
 
+		} else if ( mode === 'chase' ) {
+
+			// the latch reads the free flight's pose: make sure the eye is actually there first, so a
+			// press from the onboard camera or from the pier still gives a shot behind the frame
+			if ( ! this.freeCam ) this.setFreeCam( true );
+			this.rovCams.setMode( 'chase', this.rovCtl );
+			this.setFreeCam( false );
+
 		} else this.setFreeCam( true );
+
+	}
+
+	// The simulator's « Caméra de suivi » (pad button): the eye latches where the free flight left it,
+	// then the hull carries it — so the controls come back to the frame (keys and cockpit pad fly it)
+	// while the shot stays the one the pilot had lined up. Pressing it again gives the eye back.
+	toggleChaseCam() {
+
+		if ( this.rovCams.mode === 'chase' ) {
+
+			this.setRovCamera( 'free' );
+			if ( this.ui ) this.ui.ui.toast( 'ROV · caméra libre' );
+			return;
+
+		}
+
+		// from the pier the press takes the frame too, and enterRov() has its own word for it
+		if ( ! this.rovActive ) {
+
+			this.enterRov( 'chase' );
+			return;
+
+		}
+
+		this.setRovCamera( 'chase' );
+		if ( this.ui ) this.ui.ui.toast( 'ROV · caméra de suivi   —   les commandes sont au cadre' );
 
 	}
 
@@ -733,15 +773,23 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		}
 
 		// ---- the ROV / the walker (the vehicle first, so the cameras follow this frame's pose)
-		// one read of the cockpit's gamepads per frame, before any key or pad test below
+		// one read of the cockpit's two pad blocks per frame, before any key or pad test below:
+		// input.gamepad flies the frame (in _readRovInput), input.sim_gamepad drives the scene here
+		// and in FlyCamera — the two never mix, as the cockpit keeps them apart in its settings
 		this.input.pollPads();
-		if ( this.input.hit( 'KeyF' ) ) this.setFreeCam( ! this.freeCam );
+		if ( this.input.hit( 'KeyF' ) || this.input.simHit( 'sim_cam_free' ) ) this.setFreeCam( ! this.freeCam );
 		if ( this.input.hit( 'KeyT' ) ) this.toggleTime();
-		// L: the pilot's flashlight, or the ROV's projectors while he is aboard — the pad's
-		// « Éclairage on/off » (the cockpit's own function) does the same, aboard only
-		if ( this.input.hit( 'KeyL' ) || ( this.rovActive && this.input.padHit( 'light' ) ) ) {
+		// the pad's « Vue interne » boards the frame the way the menu's Caméra Interne does
+		if ( this.input.simHit( 'sim_view_internal' ) ) this.setRovCamera( 'internal' );
+		// « Caméra de suivi »: the eye is bolted to the hull where the free flight left it, and the
+		// frame takes the controls back — the same press releases it
+		if ( this.input.simHit( 'sim_cam_chase' ) ) this.toggleChaseCam();
+		// L: the pilot's flashlight, or the ROV's projectors while he is aboard. The simulator's
+		// « Projecteurs » button always works the frame's projectors, from any camera.
+		const padLight = this.input.simHit( 'sim_light' );
+		if ( this.input.hit( 'KeyL' ) || padLight ) {
 
-			if ( this.rovActive ) this.toggleRovLights();
+			if ( this.rovActive || padLight ) this.toggleRovLights();
 			else {
 
 				const on = this.localLights.toggleFlashlight();
@@ -808,15 +856,17 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		// swell, and the height compared against is a read-back that steps by about as much: taken
 		// bare, the lens, the flare and the underwater mix flip every other frame and the droplets
 		// never dry. Keep the crossing on a dead band, and onboard measure it against the level the
-		// frame rides rather than against the stepped answer.
-		const eyeLevel = this.rovActive && ! this.freeCam && this.rovCtl ? this.rovCtl.surface : ( this.cameraWaterHeight ?? 0 );
+		// frame rides rather than against the stepped answer. « Onboard » is the internal camera only:
+		// the chase eye sits outside the hull and takes the surface as it finds it, like the free flight.
+		const onboard = this.rovActive && this.rovCams.mode === 'internal' && this.rovCtl;
+		const eyeLevel = onboard ? this.rovCtl.surface : ( this.cameraWaterHeight ?? 0 );
 		const eyeDepth = this.camera.position.y - eyeLevel;
 		this.eyeUnderwater = eyeDepth < ( this.eyeUnderwater ? 0.05 : - 0.05 );
 		// How hard the swell washes the lens: full on the waterline, nothing a hand's width above it.
 		// Onboard, it is the frame floating that decides — its eye only sits a few centimetres over
 		// the surface and stops crossing it once up, so height alone left the lens dry nine seconds
 		// after every ascent.
-		const floating = this.rovActive && ! this.freeCam && this.rovCtl && this.rovCtl.depth < 0.05;
+		const floating = onboard && this.rovCtl.depth < 0.05;
 		const wash = this.eyeUnderwater ? 0
 			: ( floating ? 1 : MathUtils.clamp( 1 - eyeDepth / LENS_REACH, 0, 1 ) );
 

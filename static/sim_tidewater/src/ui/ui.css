@@ -501,7 +501,6 @@ body {
 	margin-left: 0.05em;
 }
 
-.tw-g-unit,
 .tw-g-lab {
 	font-size: var(--tw-fs-xs);
 	letter-spacing: 0.02em;
@@ -896,6 +895,13 @@ body {
 	gap: var(--tw-4);
 	padding: var(--tw-3) calc(18 * var(--tw-u)) var(--tw-3) var(--tw-4);
 	border-radius: calc(20 * var(--tw-u));
+	/* This is the one panel that sits over the live view for good, and it is the largest: a blurred
+	   backdrop makes the compositor re-read the canvas under it every frame, and that cost scales
+	   with the area (the small pills around it don't show). On the Pi it was worth half the frame
+	   rate. No blur here: the panel is dark enough to read the numbers against anything. */
+	background: linear-gradient(180deg, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0) 40%), rgba(9, 14, 20, 0.82);
+	-webkit-backdrop-filter: none;
+	backdrop-filter: none;
 	opacity: 0;
 	visibility: hidden;
 	transform: translateY(calc(14 * var(--tw-u)));
@@ -973,23 +979,66 @@ body {
 	color: var(--tw-sun);
 }
 
-.tw-dial,
 .tw-compass {
 	position: relative;
 	flex: none;
-}
-
-.tw-dial {
-	width: calc(128 * var(--tw-u));
-	height: calc(128 * var(--tw-u));
-}
-
-.tw-compass {
 	width: calc(104 * var(--tw-u));
 	height: calc(104 * var(--tw-u));
 }
 
-.tw-dial svg,
+/* altitude in the air / depth in the water: the free camera's height, read against the sea surface */
+.tw-alt {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-end;
+	justify-content: center;
+	gap: calc(3 * var(--tw-u));
+	min-width: calc(116 * var(--tw-u));
+	padding-left: calc(14 * var(--tw-u));
+	border-left: 1px solid rgba(170, 215, 235, 0.14);
+}
+
+.tw-alt-row {
+	display: flex;
+	align-items: baseline;
+}
+
+.tw-alt-num {
+	font-family: var(--tw-mono);
+	font-size: calc(32 * var(--tw-u));
+	font-weight: 500;
+	line-height: 1;
+	letter-spacing: -0.04em;
+	font-variant-numeric: tabular-nums;
+}
+
+.tw-alt-lab {
+	font-size: var(--tw-fs-xs);
+	font-weight: 600;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--tw-ink-3);
+}
+
+/* below the surface the reading takes the water's colour */
+.tw-boat.is-deep .tw-alt-num,
+.tw-boat.is-deep .tw-alt-lab {
+	color: var(--tw-aqua);
+}
+
+/* free camera: nothing to say about thrust or heading, the readout stands alone */
+.tw-boat.is-solo .tw-thr,
+.tw-boat.is-solo .tw-compass {
+	display: none;
+}
+
+.tw-boat.is-solo .tw-alt {
+	align-items: center;
+	min-width: 0;
+	padding-left: 0;
+	border-left: none;
+}
+
 .tw-compass svg {
 	display: block;
 	width: 100%;
@@ -997,59 +1046,6 @@ body {
 	overflow: visible;
 }
 
-.tw-dial-bg,
-.tw-dial-red,
-.tw-dial-val {
-	fill: none;
-	stroke-width: 6;
-}
-
-.tw-dial-bg {
-	stroke: rgba(170, 215, 235, 0.12);
-	stroke-linecap: round;
-}
-
-.tw-dial-red {
-	stroke: rgba(255, 122, 133, 0.38);
-}
-
-.tw-dial-val {
-	stroke-linecap: round;
-	filter: drop-shadow(0 0 4px rgba(var(--tw-aqua-rgb), 0.45));
-}
-
-.tw-dial-ticks line {
-	stroke: rgba(220, 240, 245, 0.32);
-	stroke-width: 1.2;
-	stroke-linecap: round;
-}
-
-.tw-dial-ticks line.maj {
-	stroke: rgba(230, 245, 250, 0.7);
-	stroke-width: 1.6;
-}
-
-.tw-dial-head {
-	fill: #ffffff;
-	filter: drop-shadow(0 0 4px rgba(var(--tw-aqua-rgb), 0.9));
-}
-
-.tw-boat.is-redline .tw-dial-head {
-	filter: drop-shadow(0 0 5px rgba(255, 122, 133, 0.95));
-}
-
-.tw-dial-rpm {
-	font-family: var(--tw-mono);
-	font-size: 8.5px;
-	fill: rgba(200, 222, 232, 0.6);
-	text-anchor: middle;
-}
-
-.tw-boat.is-redline .tw-dial-rpm {
-	fill: var(--tw-coral);
-}
-
-.tw-dial-center,
 .tw-hdg {
 	position: absolute;
 	inset: 0;
@@ -1058,23 +1054,6 @@ body {
 	align-items: center;
 	justify-content: center;
 	pointer-events: none;
-}
-
-.tw-dial-center {
-	padding-bottom: calc(4 * var(--tw-u));
-}
-
-.tw-speed {
-	font-family: var(--tw-mono);
-	font-size: calc(30 * var(--tw-u));
-	font-weight: 500;
-	line-height: 1;
-	letter-spacing: -0.04em;
-	font-variant-numeric: tabular-nums;
-}
-
-.tw-dial-center .tw-g-unit {
-	margin-top: calc(4 * var(--tw-u));
 }
 
 .tw-compass-ring {

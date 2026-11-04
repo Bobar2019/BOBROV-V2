@@ -119,8 +119,20 @@ Ancien emplacement supprimé : `static/sim/` (simulateur Three.js : `sim.js`, `s
 
 - `RovModel.load()` charge `bob_rov_3D.glb` + `projecteur.glb`, fusionne les primitives (attributs/normales cuits dans le repère du groupe), puis **retire les groupes de montage** : le groupe `ROV` ne porte plus que les maillages fusionnés.
 - Repère : le GLB est en repère CAO (+X coque, +Y haut, +Z travers) ; les nœuds sont tournés de −90° autour de Y pour retrouver le **repère véhicule** du moteur : **+Z avant, +Y haut, +X bâbord** (le même que l'ancien bateau).
-- Ancrages : `eye = (0, box.max.y + 0,02, box.max.z − 0,24)` (caméra embarquée) ; `floatDraft = clamp(hauteur × 0,32 ; 0,05 … 0,30) m` ; `lightsOn` + `setLights(on)` (`lensMaterial.emissiveIntensity = 8|0`).
+- Ancrages : `eye = (0, box.max.y + 0,02, box.max.z − 0,24)` (caméra embarquée) ; `floatDraft = clamp(hauteur × 0,32 ; 0,05 … 0,30) m` ; `lampAnchors` (centres des deux optiques de `projecteur.glb`, relevés **avant** la fusion, en repère du groupe) ; `lightsOn` + `setLights(on)` (`lensMaterial.emissiveIntensity = 8|0` seulement — les faisceaux sont les spots décrits ci-dessous).
 - **Le bateau d'origine a été retiré** : plus aucun maillage de coque, et le paysage sonore laisse ses sources « bateau » parquées (`boat: { active: false, rpm: 0, speed: 0, position: NO_BOAT_POS }`). Seuls subsistent le ponton, le village, la faune et les débris.
+
+### Éclairage embarqué (projecteurs)
+
+`projecteur.glb` sort du **même assemblage Onshape** que le châssis : il est déjà géométriquement aligné, aucune rotation à appliquer au maillage. Ce qui manquait, c'était la lumière dynamique (les lentilles seules étaient émissives, sans rien éclairer).
+
+- **`SpotLight` maison** (`materials/LocalLights.js`) : le moteur WebGPU n'a aucune classe `THREE.SpotLight` / `PointLight`. La classe `SpotLight` de `LocalLights.js` en reprend l'API (`position`, `target`, `intensity`, `distance`, `angle`, `penumbra`, `switchTo()`), et le pool CPU la convertit à chaque frame en slot d'uniforme (`pos`/`col`/`dir`) que lit le hook WGSL `hookLocalLights()`.
+- **Ancrage** : une source par entrée de `model.lampAnchors` (les deux optiques), montée par `spot.mount(rovGroup, ancre, cible)` ; la cible est l'ancre translatée de **+60 m sur l'axe +Z local** (avant du ROV). Le faisceau suit donc le cap et le tangage, sans toucher au mesh.
+- **Réglages** (`PROJECTOR`) : `angle = Math.PI / 6` (demi-angle façon three.js → cône de 60°, `cosOuter ≈ 0,866`), `penumbra = 0,4` (`cosInner = cos 18°`), `intensity = 150`, `distance = 60 m`, couleur `0xdfeaff`.
+- **Allumage** : `switchTo(() => model.lightsOn)` — les spots suivent exactement la touche `L` / le bouton `sim_light` qui commande `setLights()`.
+- **Priorité dans le pool** : les sources `nightOnly = false` (les projecteurs) sont packées **en premier**, à pleine puissance, de jour comme de nuit ; les lampes du village (verrou nocturne `G.night`) ne prennent que les slots restants et subissent un `smooth()` de coupure pour ne pas apparaître d'un coup.
+- **Réception sur le terrain** : `MeshShader` injecte `hookModules()` dans tout matériau éclairé et le terrain (`Terrain.js`, `standard()` + `TERRAIN_SURFACE`) passe par `shadeSurface()` → `hookLocalLights()` : le faisceau s'imprime physiquement sur le fond (profil Lambert en `LOCAL_LIGHTS_CHEAP`), puis l'absorption de l'eau le rougit/éteint (le rouge disparaît en ~5 m, d'où une tache bleu-vert en profondeur).
+- **Contrôle mesuré** (scène gelée, paires off/on sur le même fond) : de jour **+1,0 %** de luminance moyenne, écart max **+142** ; de nuit **+13,6 %**, **8,9 %** des pixels éclaircis, maximum pile dans l'axe du cône — le spot se lit comme une tache sur le sable, plus seulement comme des lentilles brillantes.
 
 ### Physique du ROV (cinématique)
 
@@ -150,10 +162,13 @@ Ce qui tourne réellement sur l'eau : `OceanFFT` (houle spectrale), `ShoreWaves`
 |---|---|---|
 | **Caméra Libre** (défaut à bord) | `FlyCamera`, vol libre autour de la coque ; pose d'entrée `RovCameras.freePose()` : 4,2 m devant, +1,15 m, cadrée sur le ROV | `F`, menu contextuel, `?fly` au chargement |
 | **Caméra Interne** (FPV) | `RovCameras` mode `'internal'` : position = `model.eye` appliqué à `group.matrixWorld`, orientation = quaternion du châssis × rotation π (la caméra regarde −Z) ; visée souris ±2,1 rad en lacet, −1,0…+0,9 rad en tangage, recentrage doux (0,6 s⁻¹) quand la souris dort | `F`, menu « Plonger (Vue Interne) » |
+| **Caméra de suivi** (Chase Cam) | `RovCameras` mode `'chase'`. À l'activation l'offset local de l'œil est latché — `inverse(group.matrixWorld) × camera.matrixWorld`, donc la pose que la caméra libre occupait à cet instant, vue dans les axes du châssis — puis chaque frame `group.matrixWorld × offset` : ni amorti ni retard, un boulon et pas un ressort. Roulis, tangage et houle du cadre passent donc tels quels dans la vue | bouton `sim_cam_chase` de la manette (second appui = Caméra Libre) |
 | **Marcheur / nageur** | `Player.js`, première personne : capsule sur terrain et colliders, nage quand la profondeur dépasse 1,35 m, retour debout à 1,1 m | état par défaut hors ROV ; `E` près du ROV pour embarquer |
 | **Caméra libre hors ROV** | `FlyCamera` puis retour au marcheur à la position de la caméra (`dropPlayerAtCamera`) | `F` |
 
 La caméra du moteur n'est jamais re-parentée : les rigs écrivent directement sa pose (les requêtes d'eau et la chaîne de post-traitement lisent sa position monde).
+
+Seule la caméra de suivi est **solidaire** : elle prend la pose du châssis sans filtrage. C'est aussi la seule vue hors caméra interne où le pilotage reste au ROV — entrer en `'chase'` remet `freeCam` à `false`, donc `App._frame()` repasse par `_readRovInput()` et `rovCtl.update()` (touches `W`/`A`/`S`/`D`/`Space`/`C` et bloc `input.gamepad`). Le latch est pris sur la pose de la caméra libre, que `FlyCamera.setPose()` écrit de façon synchrone : l'appui depuis le ponton comme depuis la caméra interne part donc de la même prise de vue `freePose()` (4,2 m devant, +1,15 m, cadrée sur le ROV).
 
 **Mode photo** (`P`) : géré par `UI.setPhotoMode()`, il masque le chrome de l'interface. `onPhotoMode` n'est branché sur rien : aucun changement de caméra, de focale ou de post-traitement.
 
@@ -165,6 +180,13 @@ La caméra du moteur n'est jamais re-parentée : les rigs écrivent directement 
 - **Mise en page** : lue dans `config.json` (`cockpit.hud.elements` : x, y, w, h, opacity, color, weight, font, max ; `cockpit.overlay[ id ] === false` masque l'instrument), avec `DEFAULT_LAYOUT` en repli (le ruban de cap y est une encoche plus bas que dans le cockpit : les notifications occupent le haut de l'écran). Les dégagements (rail de réglages, bloc d'état) passent par `data-right` / `data-top`.
 - **Valeurs** : profondeur = niveau − tirant d'eau − Y du maillage ; tangage/roulis/cap relus dans le quaternion de la pose (ordre `'YXZ'`, tangage retourné vers la convention « nez haut ») ; cap dans le repère du compas du simulateur ; PWM, tensions, température et pince sont **déduits des commandes** (pas de capteurs sur le châssis d'essai).
 - Badge de liaison en haut d'écran (`ui.setLink({state, driving, ageS})`) : « Directe » / « Perdue » / « Hors ligne », et qui tient la pose (télémétrie, clavier à plat, simulée).
+
+**HUD du simulateur** (hors cockpit, `src/ui/UI.js`) — bas-gauche et bord gauche, libellés en anglais comme le reste de cette couche :
+
+- **Caméra Libre et Caméra de suivi** (à bord) : un seul bloc `.tw-boat` = barre de poussée, compas, et la **lecture d'altitude/profondeur** (`.tw-alt`) qui a remplacé la jauge « knots / rpm % » (arc SVG, aiguille et libellés supprimés avec elle). Sous la surface le pavé passe en `.is-deep` et prend la teinte de l'eau. « À bord » s'entend ici `rovCams.mode !== 'internal'` : le mode suivi garde le bloc complet, et son titre d'état s'écrit « ROV · Caméra de suivi ».
+- **Caméra libre hors ROV** : le même bloc, réduit à la seule lecture (`.is-solo` masque la poussée et le compas ; il n'y a plus de jauge de vitesse du tout).
+- Valeur : distance verticale entre la **caméra** et la surface (`app.cameraWaterHeight`, lue sur GPU à la position de l'œil), **lissée à 6 s⁻¹ pour l'affichage seulement** (le read-back saute de quelques centimètres) ; `altitude = |y − surface|`, `deep = y < surface` → « Altitude » dans l'air, « Depth » sous l'eau. Ce n'est pas la profondeur du ROV : celle-ci reste la sonde `.tw-depth` à gauche, alimentée par `rovCtl.depth`.
+- **Pas de `backdrop-filter` sur ce bloc** : il porte bien `tw-glass` pour le fond, la bordure et l'ombre, mais `.tw-boat` neutralise le flou et remonte son fond à 82 % d'opacité. Un `backdrop-filter` posé sur la vue 3D oblige le compositeur à relire le canvas sous le panneau **à chaque frame**, et ce coût suit la surface floutée : les petites pastilles du HUD (`.tw-stats`, `.tw-mode`) passent inaperçues, ce panneau-ci non — sur le Pi il valait la moitié du frame rate (78 → 24 fps dès qu'il est apparu en « Free camera »).
 
 ### Menu contextuel (clic droit)
 
@@ -204,24 +226,33 @@ Lecture des touches : `src/core/Input.js` (Set de `code`, `hit()` = une fois par
 | `Space` | **remonter** (poussée verticale positive) |
 | `E` | embarquer (à portée du ROV) / sortir du ROV |
 | `F` | basculer Caméra Libre ↔ Caméra Interne (hors ROV : caméra libre ↔ marcheur) |
-| `L` | **projecteurs du ROV** (à bord) ; lampe torche du pilote (à pied) |
+| `L` | **projecteurs du ROV** (à bord) ; lampe torche du pilote (à pied) — le bouton `sim_light` fait la même chose depuis n'importe quelle caméra |
 | `H` | panneau de réglages ; `F1`/`?` aide ; `P` mode photo ; `Échap` fermer |
 | `T` | heure du jour ; `M` son on/off |
 | Souris | clic = capture du pointeur ; visée (pointer lock ou bouton maintenu) ; molette cumulée dans `Input.wheel` |
 
 À pied, le marcheur/nageur reprend les mêmes touches de plongée (`C`, `Space`) et `W` pour nager ; regarder vers le bas + `W` fait plonger.
 
-La manette suit le mapping du cockpit (voir ci-dessous) ; `F1`/`?` affiche la ligne correspondante dans l'aide du jeu.
+La manette est lue par deux blocs distincts de `config.json` (voir ci-dessous) ; `F1`/`?` affiche la ligne correspondante dans l'aide du jeu.
 
 ### Manette
 
-Depuis la branche `chantier-v3.5`, le simulateur lit **la manette du cockpit**. `src/core/Input.js` expose `pollPads()` (appelée une fois par frame par `App._frame`), `padCommand()`, `padHit( id )` et `padLabel()`. Le câblage n'est pas réinventé : `Input.loadPadConfig()` interroge `GET /api/config` (au démarrage, puis toutes les 3 s tant qu'elle n'a pas répondu) et reprend tel quel le bloc `input.gamepad` — `enabled`, `actions[]` et leurs `sources` `{type: 'axis'|'button', index, invert, pad?}` — plus `input.deadzone` (0,08) et `input.expo` (1,5). Les six voies historiques sont traduites comme dans le cockpit : `voie1` = surge, `voie2` = sway, `voie3` = heave, `voie4` = yaw, `voie5` = roll, `voie6` = pitch.
+Depuis `chantier-v3.6`, le simulateur lit **deux blocs indépendants** de `config.json`, tous deux servis par `GET /api/config` :
 
-Fonctions réellement consommées par le ROV virtuel (dans `App._readRovInput()`, sauf le projecteur) : `surge` → poussée avant/arrière, `yaw` (ou les boutons `yaw_left`/`yaw_right`) → lacet, `heave` (+ `surface` maintenu = pleine remontée) → plongée/remontée, `light` → bascule des projecteurs sur front montant (même chemin que la touche `L`, dans `App._frame`). `sway`, `roll` et `pitch` sont lus mais sans effet : `RovController` n'a ni commande latérale ni attitude directe. La manette BOB BL AR (`input.head_tracker.device_id`, ou un `Gamepad.id` contenant « BOB BL AR ») est écartée du pilotage.
+| Bloc | Ce qu'il commande | Édité dans |
+|---|---|---|
+| `input.gamepad` | le maillage du ROV : poussée, lacet, plongée/remontée | Paramètres › Manette, cadre « Fonctions des manettes » |
+| `input.sim_gamepad` | la scène 3D : vol libre de la caméra, vues, projecteurs | Paramètres › Manette, cadre « Contrôle Simulateur 3D » |
 
-Priorité : la manette a le dernier mot sur un axe qu'elle dévie (au-delà de la zone morte), le clavier garde les axes au repos. Signes : ceux des voies du ROV — surge positif = avant, heave positif = remonter, yaw positif = tribord — le cadre comptant le lacet à l'inverse (`steer` positif = bâbord, comme `A`). Une source est filtrée par sa clé `pad` (comparaison stricte au `Gamepad.id`), un axe compte comme « poussé » au-delà de 0,7 (seuil du cockpit) pour les fronts montants.
+`src/core/Input.js` tient donc deux jeux de lecture (`this.pad`, `this.simPad`) bâtis par la même fabrique : mêmes `sources` `{type: 'axis'|'button', index, invert, pad?}`, mêmes filtres (la clé `pad` est comparée au `Gamepad.id`, le BOB BL AR est écarté via `input.head_tracker.device_id`), même courbe (`input.deadzone` 0,08 puis `input.expo` 1,5, seuil « poussé » 0,7). `pollPads()` les remplit tous les deux une fois par frame (rappel de `/api/config` toutes les 3 s tant qu'il n'a pas répondu) ; `padCommand()` / `padHit()` ne lisent que le bloc cockpit, `simCommand()` / `simHit()` que le bloc simulateur. `endFrame()` vide les fronts montants des deux. Les six voies historiques sont traduites à l'identique : `voie1` = surge, `voie2` = sway, `voie3` = heave, `voie4` = yaw, `voie5` = roll, `voie6` = pitch.
 
-Le simulateur ne réécrit jamais `config.json` : le mapping s'édite dans le cockpit (Paramètres › Manette) et la scène doit être rechargée pour le reprendre.
+Côté ROV (`App._readRovInput()`) : `surge` → poussée avant/arrière, `yaw` (ou `yaw_left`/`yaw_right`) → lacet, `heave` (+ `surface` maintenu = pleine remontée) → plongée/remontée. `sway`, `roll` et `pitch` sont lus mais sans effet : `RovController` n'a ni commande latérale ni attitude directe. Priorité : la manette a le dernier mot sur un axe qu'elle dévie, le clavier garde les axes au repos ; signes des voies du ROV (surge + = avant, heave + = remonter, yaw + = tribord, le cadre comptant le lacet à l'inverse).
+
+Côté scène (`FlyCamera.update()` et `App._frame`) : `surge` / `sway` / `heave` translatent la caméra libre dans son propre repère (comme `W` / `D` / `E`), `yaw` / `pitch` la visent à 1,6 rad/s pleine déflexion (le combo souris garde sa sensibilité de 0,0022 rad/pixel ; les deux se cumulent). Une touche reste à pleine vitesse, la somme touches + sticks ne dépasse jamais la vitesse pleine (8 m/s, ×6 avec `Shift`). Quatre boutons : `sim_cam_free` (comme `F`), `sim_view_internal` (embarque et passe à la caméra interne, comme le menu clic droit › Plonger), `sim_cam_chase` (`App.toggleChaseCam()` : latch de la vue courante sur le châssis, embarque si nécessaire, rend le pilotage au ROV ; un second appui rend la caméra libre), `sim_light` (projecteurs du ROV, depuis n'importe quelle caméra, là où `L` ne les allume qu'à bord).
+
+Par défaut, `input.sim_gamepad` est **semé une seule fois** par `app/config.py` (`_seed_sim_gamepad`, appelée depuis `_migrate`) : les axes de déplacement du cockpit (`surge`, `sway`, `heave`, `yaw`, `pitch`) y sont recopiés avec leurs `invert` et leur clé `pad` ; `pitch` et les quatre commandes de vue restent vides, à assigner. Dès que le bloc existe dans le fichier il n'est plus réaligné : les deux cadres évoluent ensuite séparément, et `app/config.py` valide chacun avec les mêmes règles (`_validate_pad_block`).
+
+Le simulateur ne réécrit jamais `config.json` : le mapping s'édite dans le cockpit (Paramètres › Manette) et la scène relit les blocs à son chargement — recharger l'onglet Simulateur après une modification.
 
 ---
 
@@ -231,7 +262,8 @@ Le simulateur ne réécrit jamais `config.json` : le mapping s'édite dans le co
 2. **Le bateau n'existe plus** : le véhicule est le ROV (`bob_rov_3D.glb` + `projecteur.glb`), pilotable en cinématique.
 3. **Pas de sillage** : `WaterSurface.wake` est null, les fonctions WGSL de wake sont dormantes ; tout ajout de sillage suppose d'écrire un producteur et de l'affecter.
 4. **Les modèles de `models/` (racine) ne sont pas servis** : seul `static/` est monté. Les modèles du jeu vivent dans `static/sim_tidewater/models/`.
-5. **Le simulateur ne lit dans `config.json` que** `cockpit.hud.*`, `simulator.real.invert`, `input.gamepad` (avec `input.deadzone`, `input.expo`, `input.head_tracker.device_id`) ; les autres blocs `simulator.*` (world, water, physics, life, scene) ne sont pas consommés par le code actuel.
+5. **Le simulateur ne lit dans `config.json` que** `cockpit.hud.*`, `simulator.real.invert`, `input.gamepad` (bloc du ROV) et `input.sim_gamepad` (bloc de la scène), avec `input.deadzone`, `input.expo` et `input.head_tracker.device_id` ; les autres blocs `simulator.*` (world, water, physics, life, scene) ne sont pas consommés par le code actuel.
 6. **Deux réglages distincts du sens des axes** : `cockpit.hud.invert` (HUD du cockpit sur la vidéo) et `simulator.real.invert` (pose de la scène 3D, interrupteurs « ROV réel »). Ils sont volontairement découplés.
 7. **WebGPU = contexte sécurisé** : en HTTP distant le jeu ne démarre pas ; utiliser `https://<pi>:8443` ou un tunnel SSH.
 8. **`config.json` est hors dépôt** : ne pas le réécrire depuis un fichier local périmé (un `sync.sh push` l'envoie tel quel et écraserait les réglages du pilote).
+9. **Pas de `THREE.Light`** : l'éclairage local passe par le pool de 8 sources de `materials/LocalLights.js` (`SceneLighting.set('localLights', …)`), et non par des objets `Light` three.js. Ajouter une lumière = ajouter une entrée au pool, pas un nœud à la scène ; au-delà de 8 sources, les moins prioritaires n'ont pas de slot cette frame.

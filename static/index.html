@@ -808,8 +808,21 @@
             </div>
             <p class="hint pad-capture-hint" id="pad-capture-hint" hidden></p>
             <div id="pad-actions" class="pad-fn-list"></div>
-            <p class="hint">Ces associations pilotent le ROV et le HUD. Le simulateur Tidewater,
-            lui, conserve ses commandes clavier d'origine (voir Paramètres → Sub Simu).</p>
+            <p class="hint">Ces associations pilotent le ROV réel : voies moteurs, HUD et
+            commandes du poste. Le simulateur Tidewater a son propre cadre ci-dessous.</p>
+        </div>
+
+        <div class="card pad-sim-card" id="card-pad-sim">
+            <h3>Contrôle Simulateur 3D</h3>
+            <p class="hint">Cadre indépendant, réservé à la scène Tidewater : le vol libre de la
+            caméra (translation <em>surge / sway / heave</em>, visée <em>yaw / pitch</em>) et ses
+            trois commandes de vue. Les axes de déplacement du cockpit y sont recopiés une seule
+            fois, à la création du bloc (<code>input.sim_gamepad</code>) ; les modifier ici ne
+            touche pas au pilotage du vrai ROV.</p>
+            <p class="hint pad-capture-hint" id="pad-sim-capture-hint" hidden></p>
+            <div id="pad-sim-actions" class="pad-fn-list"></div>
+            <p class="hint">Le simulateur relit ce bloc à l'ouverture de la scène :
+            recharger l'onglet Simulateur après une modification.</p>
         </div>
 
         <div class="card">

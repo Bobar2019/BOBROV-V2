@@ -4396,8 +4396,9 @@ async function saveMdnsName() {
  * fonction peut porter une source par manette (clé `pad` = Gamepad.id) ;
  * sans clé `pad`, la source vaut pour toutes les manettes. */
 
-let padDraft = null;          // copie de travail rendue puis enregistrée à chaque changement
-let padCapture = null;        // capture en cours : {actionId, padKey, pads: Map(id → référence au repos)}
+let padDraft = null;          // copie de travail du bloc « cockpit » (input.gamepad)
+let padSimDraft = null;       // copie de travail du bloc « simulateur » (input.sim_gamepad)
+let padCapture = null;        // capture en cours : {actionId, target, pads: Map(id → référence au repos)}
 let padCaptureTimer = 0;
 
 /* -- BOB BL AR : source d'entrée générique, sans destination imposée -------- */
@@ -4807,16 +4808,42 @@ const PAD_FUNCTIONS = [
               hint: 'Basculer l\'affichage vidéo en plein écran', kind: 'button' },
         ],
     },
-    {
-        group: 'Simulateur',
-        items: [
-            { id: 'pause', label: 'Pause / reprise', hint: 'Sub Simulator', kind: 'button' },
-        ],
-    },
 ];
 
 const PAD_ITEMS = new Map();
 PAD_FUNCTIONS.forEach((group) => group.items.forEach((item) => PAD_ITEMS.set(item.id, item)));
+
+/** Catalogue du cadre « Contrôle Simulateur 3D » (input.sim_gamepad) : le vol libre
+ *  de la caméra et les vues du ROV virtuel. Rien de tout cela ne touche au cockpit. */
+const PAD_SIM_FUNCTIONS = [
+    {
+        group: 'Vol libre — caméra',
+        items: [
+            { id: 'surge', label: 'Avancer / reculer', hint: 'Axe du joystick', kind: 'both' },
+            { id: 'sway', label: 'Latéral — gauche / droite', hint: 'Axe du joystick', kind: 'both' },
+            { id: 'heave', label: 'Monter / descendre', hint: 'Axe du joystick', kind: 'both' },
+            { id: 'yaw', label: 'Pivoter — gauche / droite', hint: 'Axe du joystick (visée)', kind: 'both' },
+            { id: 'pitch', label: 'Regarder — haut / bas', hint: 'Axe du joystick (visée)', kind: 'both' },
+        ],
+    },
+    {
+        group: 'Vues & éclairage du ROV virtuel',
+        items: [
+            { id: 'sim_cam_free', label: 'Caméra libre — entrer / sortir',
+              hint: 'Comme la touche F dans la scène', kind: 'button' },
+            { id: 'sim_view_internal', label: 'Vue interne — embarquer à bord',
+              hint: 'Embarque et passe à la caméra interne', kind: 'button' },
+            { id: 'sim_cam_chase', label: 'Caméra de suivi — accrocher / relâcher',
+              hint: 'Fige la vue actuelle sur le châssis, du point de vue de la caméra libre ; '
+                + 'les commandes reviennent au ROV. Un second appui rend la caméra libre.', kind: 'button' },
+            { id: 'sim_light', label: 'Projecteurs — on / off',
+              hint: 'Comme la touche L à bord', kind: 'button' },
+        ],
+    },
+];
+
+const PAD_SIM_ITEMS = new Map();
+PAD_SIM_FUNCTIONS.forEach((group) => group.items.forEach((item) => PAD_SIM_ITEMS.set(item.id, item)));
 
 /** Voies historiques du cockpit → fonctions nommées du catalogue. */
 const PAD_LEGACY_IDS = {
@@ -4879,9 +4906,31 @@ function buildPadDraft() {
     byId.forEach((entry, id) => padDraft.push({ id, label: entry.label, sources: entry.sources }));
 }
 
-/** Entrée dans la section : relit la configuration puis affiche le tableau. */
+/** Même chose pour le cadre « Contrôle Simulateur 3D » (input.sim_gamepad). */
+function buildPadSimDraft() {
+    const gamepad = (CONFIG && CONFIG.input && CONFIG.input.sim_gamepad) || {};
+    const stored = Array.isArray(gamepad.actions) ? gamepad.actions : [];
+    const byId = new Map();
+    stored.forEach((action) => {
+        if (!action || typeof action.id !== 'string') return;
+        byId.set(action.id, {
+            label: typeof action.label === 'string' && action.label ? action.label : action.id,
+            sources: padSourcesOf(action).map(padCleanSource),
+        });
+    });
+    padSimDraft = [];
+    PAD_SIM_FUNCTIONS.forEach((group) => group.items.forEach((item) => {
+        const found = byId.get(item.id);
+        padSimDraft.push({ id: item.id, label: item.label, sources: found ? found.sources : [] });
+        byId.delete(item.id);
+    }));
+    byId.forEach((entry, id) => padSimDraft.push({ id, label: entry.label, sources: entry.sources }));
+}
+
+/** Entrée dans la section : relit la configuration puis affiche les deux tableaux. */
 function openPadSection() {
     buildPadDraft();
+    buildPadSimDraft();
     renderPadActions();
     renderHeadTrackerSettings();
 }
@@ -4891,46 +4940,74 @@ function sourceLabel(source) {
     return kind + (source.invert ? ' · inversé' : '');
 }
 
-/** Liste des fonctions : associations visibles et bouton unique « Associer » par ligne. */
+/** Copie de travail d'un cadre : 'cockpit' (input.gamepad) ou 'sim' (input.sim_gamepad). */
+function padDraftOf(target) {
+    return target === 'sim' ? padSimDraft : padDraft;
+}
+
+function padCatalogueOf(target) {
+    return target === 'sim' ? PAD_SIM_FUNCTIONS : PAD_FUNCTIONS;
+}
+
+function padItemsOf(target) {
+    return target === 'sim' ? PAD_SIM_ITEMS : PAD_ITEMS;
+}
+
+/** Les deux tableaux de la section (ROV réel, puis simulateur). */
 function renderPadActions() {
     if (!padDraft) buildPadDraft();
-    const container = byId('pad-actions');
-    if (!container) return;
-    container.innerHTML = '';
-    PAD_FUNCTIONS.forEach((group) => {
-        container.appendChild(el('div', 'pad-fn-group', group.group));
-        group.items.forEach((item) => {
-            const action = padDraft.find((entry) => entry.id === item.id);
-            if (action) container.appendChild(padFnItem(item, action));
-        });
-    });
-    const extras = padDraft.filter((entry) => !PAD_ITEMS.has(entry.id)
-        && entry.id !== HEAD_TRACKER_ACTION);
-    if (extras.length) {
-        container.appendChild(el('div', 'pad-fn-group', 'Autres fonctions du fichier'));
-        extras.forEach((action) => container.appendChild(padFnItem(null, action)));
-    }
-    const hint = byId('pad-capture-hint');
-    if (hint) {
-        if (padCapture) {
-            const action = padDraft.find((entry) => entry.id === padCapture.actionId);
-            const item = PAD_ITEMS.get(padCapture.actionId);
-            const what = !item || item.kind === 'both' ? 'poussez un axe ou appuyez sur un bouton'
-                : item.kind === 'axis' ? 'poussez un axe' : 'appuyez sur un bouton';
-            hint.hidden = false;
-            hint.textContent = `« ${action ? action.label : padCapture.actionId} » : ${what} de la manette `
-                + 'que vous voulez utiliser — association enregistrée aussitôt (Échap pour annuler).';
-        } else {
-            hint.hidden = true;
-        }
-    }
+    if (!padSimDraft) buildPadSimDraft();
+    renderPadList('cockpit');
+    renderPadList('sim');
     renderPadGlance();
 }
 
+/** Une liste de fonctions : associations visibles et bouton unique « Associer » par ligne. */
+function renderPadList(target) {
+    const container = byId(target === 'sim' ? 'pad-sim-actions' : 'pad-actions');
+    if (!container) return;
+    const draft = padDraftOf(target) || [];
+    container.innerHTML = '';
+    padCatalogueOf(target).forEach((group) => {
+        container.appendChild(el('div', 'pad-fn-group', group.group));
+        group.items.forEach((item) => {
+            const action = draft.find((entry) => entry.id === item.id);
+            if (action) container.appendChild(padFnItem(item, action, target));
+        });
+    });
+    const extras = draft.filter((entry) => !padItemsOf(target).has(entry.id)
+        && entry.id !== HEAD_TRACKER_ACTION);
+    if (extras.length) {
+        container.appendChild(el('div', 'pad-fn-group',
+            target === 'sim' ? 'Autres fonctions du simulateur' : 'Autres fonctions du fichier'));
+        extras.forEach((action) => container.appendChild(padFnItem(null, action, target)));
+    }
+    renderPadHint(target);
+}
+
+/** Bandeau de capture, un par cadre : seule la capture en cours parle. */
+function renderPadHint(target) {
+    const hint = byId(target === 'sim' ? 'pad-sim-capture-hint' : 'pad-capture-hint');
+    if (!hint) return;
+    const capture = padCapture && (padCapture.target || 'cockpit') === target ? padCapture : null;
+    if (!capture) {
+        hint.hidden = true;
+        return;
+    }
+    const action = (padDraftOf(target) || []).find((entry) => entry.id === capture.actionId);
+    const item = padItemsOf(target).get(capture.actionId);
+    const what = !item || item.kind === 'both' ? 'poussez un axe ou appuyez sur un bouton'
+        : item.kind === 'axis' ? 'poussez un axe' : 'appuyez sur un bouton';
+    hint.hidden = false;
+    hint.textContent = `« ${action ? action.label : capture.actionId} » : ${what} de la manette `
+        + 'que vous voulez utiliser — association enregistrée aussitôt (Échap pour annuler).';
+}
+
 /** Ligne d'une fonction : libellé, associations actuelles, boutons d'action. */
-function padFnItem(item, action) {
+function padFnItem(item, action, target = 'cockpit') {
     const row = el('div', 'pad-fn-item');
-    const capturing = !!padCapture && padCapture.actionId === action.id;
+    const capturing = !!padCapture && padCapture.actionId === action.id
+        && (padCapture.target || 'cockpit') === target;
     if (capturing) row.classList.add('capturing');
 
     const info = el('div', 'pad-fn-info');
@@ -4939,9 +5016,11 @@ function padFnItem(item, action) {
     row.appendChild(info);
 
     const analog = !!(item && (item.kind === 'axis' || item.kind === 'both'));
-    const gesture = analog ? headTrackerRoute(action.id) : null;
+    // le geste de tête n'a de sens que dans le bloc du cockpit (il le route vers une action axe)
+    const headOk = analog && target === 'cockpit';
+    const gesture = headOk ? headTrackerRoute(action.id) : null;
     const links = el('div', 'pad-fn-links');
-    action.sources.forEach((source) => links.appendChild(padSourceChip(action, source)));
+    action.sources.forEach((source) => links.appendChild(padSourceChip(action, source, target)));
     if (gesture) links.appendChild(padGestureChip(action, gesture));
     if (!action.sources.length && !gesture) links.appendChild(el('span', 'pad-fn-empty', 'Non associée'));
     row.appendChild(links);
@@ -4956,10 +5035,10 @@ function padFnItem(item, action) {
         const assign = el('button', 'btn-mini assign', action.sources.length ? '+ Associer' : 'Associer');
         assign.type = 'button';
         assign.title = 'Puis appuyez sur un bouton ou poussez un axe de la manette voulue';
-        assign.addEventListener('click', () => beginPadCapture(action.id));
+        assign.addEventListener('click', () => beginPadCapture(action.id, target));
         buttons.appendChild(assign);
     }
-    if (analog) {
+    if (headOk) {
         const captured = headTrackerCapture && headTrackerCapture.kind === 'gesture'
             && headTrackerCapture.actionId === action.id;
         const head = el('button', 'btn-mini head' + (captured ? ' capturing' : ''),
@@ -4978,7 +5057,7 @@ function padFnItem(item, action) {
 }
 
 /** Pastille d'une association : manette · contrôle, avec retrait. */
-function padSourceChip(action, source) {
+function padSourceChip(action, source, target = 'cockpit') {
     const chip = el('span', 'pad-link');
     chip.title = source.pad || 'Toutes les manettes';
     chip.appendChild(el('b', 'pad-link-pad', source.pad ? padChipLabel(source.pad) : 'Toutes'));
@@ -4986,7 +5065,7 @@ function padSourceChip(action, source) {
     const clear = el('button', 'pad-link-x', '✕');
     clear.type = 'button';
     clear.title = 'Retirer cette association';
-    clear.addEventListener('click', () => clearPadSource(action, source.pad || ''));
+    clear.addEventListener('click', () => clearPadSource(action, source.pad || '', target));
     chip.appendChild(clear);
     return chip;
 }
@@ -5008,8 +5087,8 @@ function padGestureChip(action, route) {
 /* -- Capture : « Assigner » → attente d'un appui ou d'une poussée d'axe ----- */
 
 /** « Associer » : la première manette manipulée devient le périphérique de l'association. */
-function beginPadCapture(actionId) {
-    if (padCapture && padCapture.actionId === actionId) {
+function beginPadCapture(actionId, target = 'cockpit') {
+    if (padCapture && padCapture.actionId === actionId && padCapture.target === target) {
         endPadCapture();
         return;
     }
@@ -5017,7 +5096,7 @@ function beginPadCapture(actionId) {
     const pads = padsConnected();
     if (!pads.length) { toast('Aucune manette détectée — allumez-la et appuyez sur un bouton', 'err'); return; }
     if (padCapture) endPadCapture();
-    padCapture = { actionId, pads: new Map() };
+    padCapture = { actionId, target, pads: new Map() };
     pads.forEach((pad) => padCapture.pads.set(pad.id, padRestState(pad)));
     renderPadActions();
     clearInterval(padCaptureTimer);
@@ -5055,7 +5134,7 @@ function captureGamepadStep() {
             rest = padRestState(pad);
             padCapture.pads.set(pad.id, rest);
         }
-        const item = PAD_ITEMS.get(padCapture.actionId);
+        const item = padItemsOf(padCapture.target).get(padCapture.actionId);
         const kind = item ? item.kind : 'both';
         if (kind !== 'button') {
             for (let index = 0; index < pad.axes.length; index += 1) {
@@ -5081,25 +5160,29 @@ function captureGamepadStep() {
 }
 
 function assignPadSource(pad, source) {
-    const action = padDraft && padDraft.find((entry) => entry.id === padCapture.actionId);
+    const target = padCapture.target || 'cockpit';
+    const draft = padDraftOf(target);
+    const action = draft && draft.find((entry) => entry.id === padCapture.actionId);
     if (!action) { endPadCapture(); return; }
     const next = { type: source.type, index: source.index, invert: !!source.invert, pad: pad.id };
     action.sources = action.sources.filter((entry) => (entry.pad || '') !== pad.id);
     action.sources.push(next);
     endPadCapture();
     toast(`« ${action.label} » → ${sourceLabel(next)} · ${padChipLabel(pad.id)}`);
-    saveGamepad(true);                                               // enregistrement immédiat
+    savePad(target, true);                                           // enregistrement immédiat
 }
 
-function clearPadSource(action, padKey) {
+function clearPadSource(action, padKey, target = 'cockpit') {
     action.sources = action.sources.filter((entry) => (entry.pad || '') !== padKey);
     renderPadActions();
-    saveGamepad(true);
+    savePad(target, true);
 }
 
-async function saveGamepad(silent) {
-    if (!padDraft) return false;
-    const actions = padDraft.map((entry) => ({
+/** Enregistre un des deux blocs : input.gamepad (cockpit) ou input.sim_gamepad (scène 3D). */
+async function savePad(target, silent) {
+    const draft = padDraftOf(target);
+    if (!draft) return false;
+    const actions = draft.map((entry) => ({
         id: entry.id,
         label: entry.label,
         sources: entry.sources.map((source) => {
@@ -5109,8 +5192,11 @@ async function saveGamepad(silent) {
         }),
     }));
     try {
-        await patchConfig({ input: { gamepad: { enabled: true, actions } } });
-        if (!silent) toast('Associations des manettes enregistrées');
+        await patchConfig({ input: { [target === 'sim' ? 'sim_gamepad' : 'gamepad']: { enabled: true, actions } } });
+        if (!silent) {
+            toast(target === 'sim' ? 'Association du simulateur enregistrée'
+                : 'Associations des manettes enregistrées');
+        }
         return true;
     } catch (error) {
         toast('Enregistrement refusé : ' + error.message, 'err', 5200);
@@ -5768,7 +5854,7 @@ const PAD_GLANCE = { free: '#2ee6a8', used: '#f4657e', sig: '' };
 function padGlanceSets(which) {
     const buttons = new Set();
     const axes = new Set();
-    (padDraft || []).forEach((action) => (action.sources || []).forEach((source) => {
+    (padDraft || []).concat(padSimDraft || []).forEach((action) => (action.sources || []).forEach((source) => {
         if (!source) return;
         if (source.pad) {
             // L'id BOB BL AR est reconnu d'abord : certains descripteurs HID

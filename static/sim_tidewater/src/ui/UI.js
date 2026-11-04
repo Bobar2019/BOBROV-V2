@@ -1963,7 +1963,7 @@ export class UI {
 		this.promptText = h( 'span', 'tw-prompt-text' );
 		this.promptEl.append( this.promptKey, this.promptText );
 
-		// bottom-left: boat instruments
+		// bottom-left: boat instruments (thrust, compass) and the free camera's altitude/depth
 		this.boatEl = this._buildBoat();
 
 		// left: depth sounder
@@ -2002,18 +2002,6 @@ export class UI {
 
 		};
 
-		// RPM arc: 270° sweep from 135° (lower left) clockwise to 45° (lower right)
-		const ARC = 'M24.64 95.36A50 50 0 1 1 95.36 95.36';
-		let ticks = '';
-		for ( let i = 0; i <= 10; i ++ ) {
-
-			const maj = i % 5 === 0;
-			const [ x1, y1 ] = P( 60, maj ? 37.5 : 40.5, 135 + 27 * i );
-			const [ x2, y2 ] = P( 60, 44, 135 + 27 * i );
-			ticks += `<line class="${ maj ? 'maj' : '' }" x1="${ x1 }" y1="${ y1 }" x2="${ x2 }" y2="${ y2 }"/>`;
-
-		}
-
 		// compass card: ticks every 10°, cardinal letters every 90°
 		let card = '';
 		for ( let d = 0; d < 360; d += 10 ) {
@@ -2032,23 +2020,14 @@ export class UI {
 
 		}
 
-		const gid = uid( 'tw-rpm' );
 		el.innerHTML = `
 			<div class="tw-thr">
 				<div class="tw-thr-bar"><span class="tw-thr-pos"></span><span class="tw-thr-neg"></span><span class="tw-thr-zero"></span></div>
 				<span class="tw-thr-val">0%</span>
 			</div>
-			<div class="tw-dial">
-				<svg viewBox="0 0 120 120">
-					<defs><linearGradient id="${ gid }" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#3fc0d6"/><stop offset=".62" stop-color="#5fe3d4"/><stop offset="1" stop-color="#ffb86b"/></linearGradient></defs>
-					<path class="tw-dial-bg" d="${ ARC }"/>
-					<path class="tw-dial-red" d="${ ARC }" pathLength="100" stroke-dasharray="14 100" stroke-dashoffset="-86"/>
-					<path class="tw-dial-val" d="${ ARC }" pathLength="100" stroke-dasharray="0 100" stroke="url(#${ gid })"/>
-					<g class="tw-dial-ticks">${ ticks }</g>
-					<circle class="tw-dial-head" r="3" cx="24.64" cy="95.36"/>
-					<text class="tw-dial-rpm" x="60" y="105">rpm 0%</text>
-				</svg>
-				<div class="tw-dial-center"><span class="tw-speed">0.0</span><span class="tw-g-unit">knots</span></div>
+			<div class="tw-alt">
+				<div class="tw-alt-row"><span class="tw-alt-num">0.0</span><span class="tw-unit">m</span></div>
+				<span class="tw-alt-lab">Altitude</span>
 			</div>
 			<div class="tw-compass">
 				<svg viewBox="0 0 100 100">
@@ -2061,10 +2040,8 @@ export class UI {
 		this.bThrPos = el.querySelector( '.tw-thr-pos' );
 		this.bThrNeg = el.querySelector( '.tw-thr-neg' );
 		this.bThrText = el.querySelector( '.tw-thr-val' );
-		this.bArc = el.querySelector( '.tw-dial-val' );
-		this.bHead = el.querySelector( '.tw-dial-head' );
-		this.bRpmText = el.querySelector( '.tw-dial-rpm' );
-		this.bSpeed = el.querySelector( '.tw-speed' );
+		this.bAltNum = el.querySelector( '.tw-alt-num' );
+		this.bAltLab = el.querySelector( '.tw-alt-lab' );
 		this.bCard = el.querySelector( '.tw-compass-card' );
 		this.bHdgText = el.querySelector( '.tw-hdg-num' );
 		this.bHdgCard = el.querySelector( '.tw-hdg-card' );
@@ -2156,7 +2133,7 @@ export class UI {
 						${ row( k( 'Shift' ), 'Sprint, full thrust' ) }
 						${ row( k( 'Space' ), 'Jump, swim up, surface' ) }
 						${ row( k( 'C' ), 'Crouch, dive' ) }
-						${ row( 'Manette', 'Gamepad<small>Mêmes axes et boutons que le cockpit</small>' ) }
+						${ row( 'Manette', 'Gamepad<small>Cadre “Contrôle Simulateur 3D” des réglages : vol libre, vues, projecteurs</small>' ) }
 					</section>
 					<section>
 						<h3>Interact</h3>
@@ -2767,25 +2744,31 @@ export class UI {
 
 		if ( ! vis ) return;
 
-		const spd = Math.abs( Number( g.speedKnots ) || 0 ).toFixed( 1 );
-		if ( spd !== this._bSpd ) {
+		// the free camera has no thrust to report, only where it flies: the cluster shrinks to the
+		// altitude/depth readout
+		const solo = !! g.solo;
+		if ( solo !== !! this._bSolo ) {
 
-			this._bSpd = spd;
-			this.bSpeed.textContent = spd;
+			this._bSolo = solo;
+			this.boatEl.classList.toggle( 'is-solo', solo );
 
 		}
 
-		const rpm = clamp( Number( g.rpm ) || 0, 0, 1 );
-		const rq = Math.round( rpm * 1000 );
-		if ( rq !== this._bRpm ) {
+		// one readout, two readings: height above the surface in the air, depth below it in the water
+		const deep = !! g.deep;
+		if ( deep !== !! this._bDeep ) {
 
-			this._bRpm = rq;
-			this.bArc.setAttribute( 'stroke-dasharray', `${ ( rpm * 100 ).toFixed( 2 ) } 100` );
-			const a = ( 135 + 270 * rpm ) * Math.PI / 180;
-			this.bHead.setAttribute( 'cx', ( 60 + 50 * Math.cos( a ) ).toFixed( 2 ) );
-			this.bHead.setAttribute( 'cy', ( 60 + 50 * Math.sin( a ) ).toFixed( 2 ) );
-			this.boatEl.classList.toggle( 'is-redline', rpm > 0.86 );
-			this.bRpmText.textContent = `rpm ${ Math.round( rpm * 100 ) }%`;
+			this._bDeep = deep;
+			this.bAltLab.textContent = deep ? 'Depth' : 'Altitude';
+			this.boatEl.classList.toggle( 'is-deep', deep );
+
+		}
+
+		const alt = Math.round( Math.abs( Number( g.altitude ) || 0 ) * 10 );
+		if ( alt !== this._bAlt ) {
+
+			this._bAlt = alt;
+			this.bAltNum.textContent = ( alt / 10 ).toFixed( 1 );
 
 		}
 
@@ -3596,8 +3579,10 @@ export class UI {
 			ui.setStats( live );
 
 			const boat = MODES[ mode ][ 0 ].startsWith( 'Boat' );
+			const cam = MODES[ mode ][ 0 ] === 'Free camera';
 			const thr = clamp( Math.sin( t * 0.35 ) * 0.65 + 0.35, - 1, 1 );
-			ui.setBoatGauges( { visible: boat, speedKnots: Math.max( 0, thr ) * 26, rpm: clamp( 0.1 + Math.abs( thr ) * 0.9, 0, 1 ), throttle: thr, heading: ( 200 + t * 9 ) % 360 } );
+			const alt = 6 + Math.sin( t * 0.3 ) * 5;
+			ui.setBoatGauges( { visible: boat || cam, solo: cam, throttle: thr, heading: ( 200 + t * 9 ) % 360, altitude: alt, deep: alt < 0 } );
 			ui.setDepth( { visible: MODES[ mode ][ 0 ] === 'Diving', meters: 7 + Math.sin( t * 0.45 ) * 5 } );
 			raf = requestAnimationFrame( loop );
 

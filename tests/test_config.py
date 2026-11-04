@@ -316,6 +316,69 @@ def test_gamepad_sources_rejected(tmp_path):
                 {"id": "surge", "label": "Avance / recul", "sources": sources}]}}})
 
 
+# -- Contrôle Simulateur 3D (input.sim_gamepad, indépendant du cockpit) -----------
+
+def test_sim_gamepad_defaults_are_scene_only(tmp_path):
+    cfg = ConfigManager(tmp_path / "config.json").load()
+    sim = cfg["input"]["sim_gamepad"]
+    assert sim["enabled"] is True
+    assert [action["id"] for action in sim["actions"]] == [
+        "surge", "sway", "heave", "yaw", "pitch",
+        "sim_cam_free", "sim_view_internal", "sim_cam_chase", "sim_light"]
+    assert all(action["sources"] == [] for action in sim["actions"])
+    # les deux blocs sont distincts : rien de la scène n'entre dans le cockpit
+    cockpit_ids = [action["id"] for action in cfg["input"]["gamepad"]["actions"]]
+    assert "sim_cam_free" not in cockpit_ids and "sim_light" not in cockpit_ids
+
+
+def test_sim_gamepad_seeded_once_from_cockpit_axes(tmp_path):
+    path = tmp_path / "config.json"
+    surge = [{"type": "axis", "index": 1, "invert": True, "pad": "Wireless Controller"}]
+    yaw = [{"type": "axis", "index": 0, "invert": False, "pad": "Wireless Controller"}]
+    path.write_text(json.dumps({"input": {"gamepad": {"enabled": True, "actions": [
+        {"id": "voie1", "label": "Avance / recul", "sources": surge},
+        {"id": "voie4", "label": "Lacet", "sources": yaw},
+        {"id": "rec", "label": "Enregistrer", "sources": []},
+    ]}}}), encoding="utf-8")
+    cfg = ConfigManager(path).load()
+    sim = {action["id"]: action["sources"]
+           for action in cfg["input"]["sim_gamepad"]["actions"]}
+    assert sim["surge"] == surge          # voie1 reprise sous son nom courant
+    assert sim["yaw"] == yaw              # voie4 aussi
+    assert sim["sway"] == []              # rien à cloner : reste à assigner
+    assert sim["sim_light"] == []
+    # le semis est écrit sur le disque, pas seulement gardé en mémoire
+    on_disk = json.loads(path.read_text(encoding="utf-8"))["input"]["sim_gamepad"]
+    assert {action["id"]: action["sources"] for action in on_disk["actions"]}["surge"] == surge
+    # semis unique : dès que le bloc vit dans le fichier, il n'est plus réaligné
+    mgr = ConfigManager(path)
+    mgr.load()
+    cleared = [{"id": "surge", "label": "Caméra libre — avancer / reculer", "sources": []}]
+    mgr.update({"input": {"sim_gamepad": {"enabled": False, "actions": cleared}}})
+    reloaded = ConfigManager(path).load()["input"]["sim_gamepad"]
+    assert reloaded["actions"] == cleared
+    assert reloaded["enabled"] is False
+
+
+def test_sim_gamepad_leaves_cockpit_untouched_and_is_validated(tmp_path):
+    path = tmp_path / "config.json"
+    mgr = ConfigManager(path)
+    mgr.load()
+    cockpit_before = json.loads(path.read_text(encoding="utf-8"))["input"]["gamepad"]
+    actions = [{"id": "sim_light", "label": "Projecteurs — on / off",
+                "sources": [{"type": "button", "index": 12, "invert": False, "pad": ""}]}]
+    mgr.update({"input": {"sim_gamepad": {"enabled": True, "actions": actions}}})
+    assert json.loads(path.read_text(encoding="utf-8"))["input"]["gamepad"] == cockpit_before
+    for bad in (
+        {"enabled": "oui", "actions": []},
+        {"enabled": True, "actions": [{"id": "", "label": "x", "sources": []}]},
+        {"enabled": True, "actions": [{"id": "sim_light", "label": "x",
+                                       "sources": [{"type": "trigger", "index": 1}]}]},
+    ):
+        with pytest.raises(ConfigError):
+            mgr.update({"input": {"sim_gamepad": bad}})
+
+
 # -- Enregistrement stéréo 3D (section CAMÉRAS → stéréo) --------------------------
 
 def test_stereo_defaults_present_and_valid(tmp_path):

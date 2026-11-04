@@ -196,9 +196,10 @@ export class AppUI {
 			link.addInfo( { label: 'Liaison', get: () => real.linkLabel() } );
 			link.addInfo( { label: 'Dernière trame', get: () => real.ageLabel() } );
 			link.addInfo( { label: 'Commande', get: () => real.driveLabel() } );
-			// the pilot's own wiring (input.gamepad of config.json, read over /api/config): the
-			// pad drives the frame with the very axes and buttons the cockpit assigned
-			link.addInfo( { label: 'Manette', get: () => app.input.padLabel() } );
+			// the pilot's own wiring, two separate blocks of config.json read over /api/config:
+			// input.gamepad flies the frame, input.sim_gamepad flies the free camera (and its views)
+			link.addInfo( { label: 'Manette ROV', get: () => app.input.padLabel() } );
+			link.addInfo( { label: 'Manette simu', get: () => app.input.simLabel() } );
 			// The scene's own sense. The cockpit's three switches (Config Cockpit › HUD télémétrie)
 			// correct its HUD over the video feed; a mirrored HUD and a mirrored model are two
 			// different things, so the 3D pose is set here and stored in simulator.real.invert.
@@ -272,14 +273,18 @@ export class AppUI {
 		const p = app.player;
 		const r = app.rovCtl;
 
-		// piloting the ROV: Caméra Interne (onboard, the keys drive the frame) or Caméra Libre
-		// (free flight around it)
+		// piloting the ROV: Caméra Interne (onboard, the keys drive the frame), Caméra Libre (free
+		// flight around it) or Caméra de suivi (the eye bolted to the hull, the keys still on the frame)
 		if ( app.rovActive ) {
 
-			const internal = ! app.freeCam;
+			const rig = app.rovCams.mode;
+			// « internal » is about where the eye is, not who holds the controls: the chase camera is
+			// outside the hull and keeps the boat instruments
+			const internal = rig === 'internal';
 			const diving = r.depth > 0.3;
-			ui.setMode( ! internal ? 'ROV · Caméra Libre'
-				: diving ? `ROV · ${ r.depth.toFixed( 1 ) } m` : 'ROV · Caméra Interne' );
+			ui.setMode( rig === 'chase' ? 'ROV · Caméra de suivi'
+				: ! internal ? 'ROV · Caméra Libre'
+					: diving ? `ROV · ${ r.depth.toFixed( 1 ) } m` : 'ROV · Caméra Interne' );
 			if ( internal ) ui.setPrompt( 'E', 'Sortir du ROV   ·   C / Space  plonger / remonter' );
 			else ui.setPrompt( 'Clic droit', 'Plonger (Vue Interne)   ·   E  sortir' );
 
@@ -288,10 +293,8 @@ export class AppUI {
 			ui.setBoatGauges( {
 				visible: ! internal,
 				throttle: r.throttle,
-				// the gauge is the thruster load: surge and the vertical thrusters together
-				rpm: Math.min( 1, Math.abs( r.throttle ) * 0.85 + Math.abs( r.vertical ) * 0.3 ),
-				speedKnots: r.speed * 1.94384,
 				heading: ( THREE.MathUtils.radToDeg( Math.atan2( Math.sin( r.yaw ), - Math.cos( r.yaw ) ) ) + 360 ) % 360,
+				...this._altitude( dt ),
 			} );
 			ui.setTelemetry( { visible: internal, rov: r } );
 			ui.setDepth( { visible: ! internal && diving, meters: r.depth } );
@@ -303,7 +306,8 @@ export class AppUI {
 
 			ui.setMode( 'Free camera' );
 			ui.setPrompt( 'F', 'Walk' );
-			ui.setBoatGauges( { visible: false } );
+			// nothing to say about a boat here: the cluster is the eye's own altimeter
+			ui.setBoatGauges( { visible: true, solo: true, ...this._altitude( dt ) } );
 			ui.setDepth( { visible: false } );
 			ui.setTelemetry( { visible: false } );
 			return;
@@ -319,6 +323,20 @@ export class AppUI {
 
 		const depth = ( app.cameraWaterHeight ?? 0 ) - app.camera.position.y;
 		ui.setDepth( { visible: p.mode === 'swim' && depth > 0.3, meters: depth } );
+
+	}
+
+	// How far the eye sits above the sea surface (altitude) or below it (depth). The surface comes from
+	// the GPU read-back, which steps by centimetres and would make the readout flicker: smoothed here,
+	// display only, so it never feeds back into the simulation.
+	_altitude( dt ) {
+
+		const app = this.app;
+		const target = app.cameraWaterHeight ?? 0;
+		this._surface = this._surface === undefined
+			? target : this._surface + ( target - this._surface ) * ( 1 - Math.exp( - 6 * dt ) );
+		const d = app.camera.position.y - this._surface;
+		return { altitude: Math.abs( d ), deep: d < 0 };
 
 	}
 

@@ -1205,6 +1205,10 @@ output {
 .rename-line .ok { border-color: var(--success); color: var(--success); }
 
 /* ===== MANETTE — fonctions assignables (une ligne par fonction) ===== */
+/* Cadre « Contrôle Simulateur 3D » : bloc de manette distinct de celui du cockpit */
+.pad-sim-card { border-left: 3px solid var(--accent-cyan); }
+.pad-sim-card .pad-fn-item { border-style: dashed; }
+
 .pad-fn-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
 .pad-fn-group {
     margin-top: 12px;
