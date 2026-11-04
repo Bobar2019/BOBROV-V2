@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+	<meta charset="utf-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>BOBROV SIMULATOR</title>
+	<link rel="preload" as="image" href="ui/keyart-720.jpg" imagesrcset="ui/keyart-720.jpg 1280w, ui/keyart.jpg 2560w" imagesizes="100vw" />
+	<link rel="preconnect" href="https://fonts.googleapis.com" />
+	<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+	<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Caveat+Brush&family=Kalam:wght@400;700&display=swap" rel="stylesheet" />
+	<link rel="stylesheet" href="./src/ui/ui.css" />
+	<link rel="stylesheet" href="./src/ui/telemetry.css" />
+	<style>
+		html, body { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; background: #000; }
+		#app, #app canvas { display: block; }
+		#fps { position: fixed; top: 10px; left: 12px; z-index: 50; font: 500 12px/1.2 'JetBrains Mono', ui-monospace, monospace;
+			color: #e8f6ff; background: rgba(8, 14, 22, 0.55); padding: 5px 9px; border-radius: 6px; pointer-events: none;
+			backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); letter-spacing: 0.02em; }
+	</style>
+</head>
+<body>
+	<div id="app"></div>
+	<div id="fps">-- fps</div>
+	<div id="loader" role="status" aria-live="polite" aria-label="Loading BOBROV SIMULATOR">
+		<img class="loader-art" src="ui/keyart-720.jpg" srcset="ui/keyart-720.jpg 1280w, ui/keyart.jpg 2560w" sizes="100vw" alt="" decoding="async" fetchpriority="high" onload="this.classList.add('is-in')" />
+		<div class="loader-scrim"></div>
+		<div class="loader-inner">
+			<div class="loader-brand">
+				<p class="loader-kicker">Bouée instrumentée · banc d'essai ROV</p>
+				<h1 class="loader-title">BOBROV SIMULATOR</h1>
+				<p class="loader-tagline">Le ROV d'essai est amarré au ponton : approchez-vous, embarquez, puis plongez sous la surface pour le piloter en vue interne.</p>
+			</div>
+			<div class="loader-panel">
+				<div class="loader-row">
+					<span class="loader-status">Starting…</span>
+					<span class="loader-meta"><span class="loader-pct">0%</span><span class="loader-time">0:00</span></span>
+				</div>
+				<div class="loader-bar"><div class="loader-fill"></div><div class="loader-glint"></div></div>
+				<div class="loader-note">The first launch compiles the shaders and can take a minute or two. Later visits load much faster.</div>
+				<div class="loader-tips">
+					<span class="loader-tip-label">Tip</span>
+					<div class="loader-tip-list">
+						<p class="loader-tip">Click the view to capture the mouse, then press <kbd>E</kbd> next to the ROV to board it.</p>
+						<p class="loader-tip">Aboard, <kbd>W</kbd> and <kbd>S</kbd> drive the thrusters and <kbd>A</kbd> and <kbd>D</kbd> swing the frame. <kbd>Shift</kbd> is full thrust.</p>
+						<p class="loader-tip">Hold <kbd>C</kbd> to dive and <kbd>Space</kbd> to surface. Let go and the frame drifts back up on its own.</p>
+						<p class="loader-tip">Right-click the ROV for its context menu: <em>Plonger (Vue Interne)</em> moves you to the onboard camera.</p>
+						<p class="loader-tip">Press <kbd>F</kbd> to swap the free camera around the frame for the onboard camera, and <kbd>L</kbd> for the projectors.</p>
+						<p class="loader-tip">Press <kbd>H</kbd> for the settings panel and <kbd>F1</kbd> for the full list of controls.</p>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+	<script type="module" src="./src/main.js"></script>
+</body>
+</html>

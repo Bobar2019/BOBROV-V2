@@ -11,7 +11,7 @@ BOBROV-V2 est le cockpit embarqué de **cockpit-lite-rov**, destiné au pilotage
 - Gestion multi-manettes via la Web Gamepad API, associations persistées par `Gamepad.id`.
 - Liaison série robuste avec l'ESP32-S3 : commandes, télémétrie et reconnexion automatique.
 - Gestion réseau locale, médiathèque vidéo et maintenance du service depuis l'interface.
-- Sub Simulator : physique ROV six axes et rendu 3D Three.js, intégrés sans dépendance CDN au runtime.
+- Sub Simulator : simulateur 3D **Tidewater** (moteur de rendu WebGPU maison, licence MIT) servi en page autonome sous `/sim_tidewater/`.
 - Support du head-tracker BLE HID **BOB BL AR**.
 
 ## Architecture
@@ -33,7 +33,26 @@ La télémétrie est actuellement consultée par API HTTP (`/api/system/telemetr
 
 Le frontend est une SPA HTML/CSS/JavaScript natif, sans framework. `static/app.js` gère le cockpit, les caméras, le HUD Canvas, les enregistrements, les paramètres et les manettes.
 
-Le dossier `static/sim/` contient le Sub Simulator : moteur physique six degrés de liberté, mixage des propulseurs, scène 3D Three.js et harnais de tests autonome. Three.js est fourni localement dans les assets du projet.
+Le dossier `static/sim_tidewater/` contient le Sub Simulator : le jeu 3D **Tidewater** (île, océan, bateau et pêche) récupéré de <https://github.com/dgreenheck/tidewater> et servi tel quel. Le projet d'origine est un jeu WebGPU écrit en modules ES natifs (moteur maison, sans Three.js ni dépendance npm) : seuls les chemins d'assets ont été rendus relatifs à la page. La page du SPA charge le jeu dans une iframe à la demande, pour isoler son contexte GPU, clavier et audio. Crédits et licence MIT : Paramètres → Sub Simu.
+
+### Accès HTTPS (port 8443) et WebGPU
+
+Le cockpit est servi en HTTP sur `config.json → network.port` (8080). Un second écouteur **HTTPS auto-signé sur le port 8443** est démarré par le même processus (`app/serve.py`) dès que le certificat existe :
+
+```bash
+./deploy/gen-cert.sh                # une fois : deploy/tls/{cert,key}.pem, valable 10 ans
+sudo systemctl restart bob-rov
+```
+
+Ouvrez ensuite `https://<ip-du-pi>:8443` et acceptez l'avertissement de certificat une fois par appareil. Le certificat couvre `bobrov.local`, `localhost`, `127.0.0.1` et les adresses du Pi au moment de sa génération : relancez `gen-cert.sh` si l'adresse change.
+
+Ce port n'est pas décoratif : les navigateurs n'exposent **WebGPU** — donc le simulateur Tidewater — qu'aux contextes sécurisés (`https:`, `localhost`, `127.0.0.1`). En HTTP simple sur l'IP du Pi, `navigator.gpu` est absent et le jeu répond « WebGPU is not available in this browser ». Repli sans certificat, par tunnel SSH :
+
+```bash
+ssh -L 8080:localhost:8080 bob@192.168.1.128   # puis http://localhost:8080
+```
+
+Le port 8080 reste servi à l'identique. Les deux écouteurs partagent la même instance d'application, car la liaison série, la vidéo et les superviseurs sont des singletons de processus qu'un second uvicorn ouvrirait deux fois.
 
 ### Matériel
 
@@ -54,7 +73,7 @@ Le tracker est volontairement indépendant de toute destination matérielle. Sa 
 
 Le repli WebHID écrit directement le Report ID `1` avec la charge utile `FF FF 64 00` : deux magnitudes non nulles et une durée de 100 ms little-endian. Cliquez une fois sur `Associer BOB BL AR (WebHID)` dans la carte Manette pour donner l'autorisation au navigateur ; les tares suivantes sont ensuite automatiques depuis le bouton magique.
 
-> WebHID exige Chromium/Chrome récent dans un **contexte sécurisé** : `https://…` ou `http://localhost`. Une page ouverte par HTTP sur une adresse LAN ne peut pas demander cette autorisation. Utilisez un accès local au Pi ou servez le cockpit derrière HTTPS.
+> WebHID exige Chromium/Chrome récent dans un **contexte sécurisé** : `https://…` ou `http://localhost`. Une page ouverte par HTTP sur une adresse LAN ne peut pas demander cette autorisation : utilisez `https://<ip-du-pi>:8443` (voir « Accès HTTPS ») ou un tunnel SSH vers `http://localhost:8080`.
 
 Sur Raspberry Pi OS/Linux, installez aussi la règle udev fournie puis reconnectez le BOB BL AR :
 
@@ -65,7 +84,7 @@ sudo udevadm control --reload-rules
 sudo udevadm trigger --subsystem-match=hidraw
 ```
 
-Fermez et rouvrez la session de l'utilisateur qui exécute Chromium après l'ajout au groupe. Un anti-rebond frontend de 250 ms complète celui du firmware. En pilotage, le maintien du bouton magique active uniquement les gestes déjà capturés ; chaque axe routé expose une consigne normalisée entre `-1.0` et `+1.0`, sans imposer de caméra, pan/tilt ou voie matérielle. La consigne est publiée dans `window.BOBROV_HEAD_TRACKER_INPUT` et via l'événement `bobrov:head-tracker-input`; le Sub Simulator consomme également ce routage.
+Fermez et rouvrez la session de l'utilisateur qui exécute Chromium après l'ajout au groupe. Un anti-rebond frontend de 250 ms complète celui du firmware. En pilotage, le maintien du bouton magique active uniquement les gestes déjà capturés ; chaque axe routé expose une consigne normalisée entre `-1.0` et `+1.0`, sans imposer de caméra, pan/tilt ou voie matérielle. La consigne est publiée dans `window.BOBROV_HEAD_TRACKER_INPUT` et via l'événement `bobrov:head-tracker-input`.
 
 ## Installation
 
@@ -132,9 +151,9 @@ Le harnais du simulateur est disponible depuis son interface. Les essais de rend
 
 ```text
 app/                 Backend FastAPI, configuration, série, vidéo et routeurs
-static/              SPA cockpit, HUD Canvas et Sub Simulator Three.js
+static/              SPA cockpit, HUD Canvas et simulateur Tidewater
 tests/               Tests automatisés Python
-deploy/              Unité systemd et règle udev WebHID versionnées
+deploy/              Unité systemd, règle udev WebHID et script de certificat TLS
 videos/.gitkeep      Répertoire de médias local, vide dans Git
 logs/.gitkeep        Répertoire de logs local, vide dans Git
 run.sh               Lance Uvicorn depuis l'environnement virtuel

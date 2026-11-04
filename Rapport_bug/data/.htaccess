@@ -1,0 +1,13 @@
+# =====================================================
+# data/ — rapports de bug
+# Accès HTTP direct interdit : ces fichiers contiennent le
+# contexte des pages de l'administration (usage interne).
+# Seul bugs.php les lit côté serveur.
+# =====================================================
+<IfModule mod_authz_core.c>
+  Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+  Order deny,allow
+  Deny from all
+</IfModule>

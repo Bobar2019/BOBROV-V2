@@ -54,6 +54,10 @@
     --pip-w: 28%;
     --pip-o: 0.9;
 
+    /* Hauteur mesurée de la topbar collante (app.js) — sert au placement
+       du bouton retour ; la valeur par défaut couvre le cas statique. */
+    --topbar-h: 52px;
+
     color-scheme: dark;   /* contrôles natifs en sombre */
 }
 
@@ -1549,9 +1553,13 @@ output {
 .sys-overlay .btn { margin-top: 16px; }
 
 /* ===== BOUTON RETOUR + FOOTER ===== */
+/* En HAUT à droite, sous la topbar collante : en bas il se superposait au
+   bouton 🐛 de Rapport_bug (fixe lui aussi en bas à droite). La hauteur de
+   la topbar n'est pas constante — ses badges passent à la ligne sur écran
+   étroit — donc app.js publie sa mesure dans --topbar-h. */
 .back-top-btn {
     position: fixed;
-    bottom: 22px;
+    top: calc(var(--topbar-h) + 10px);
     right: 22px;
     z-index: 90;
     width: 48px; height: 48px;
@@ -1694,6 +1702,108 @@ output {
 .modal-head h3 { margin: 0; }
 .modal-body { display: grid; gap: 10px; }
 
+/* ===== SIMULATEUR (Tidewater) ===== */
+
+/* En-tête de section : titre à gauche, commandes à droite. */
+.sim-head {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+    margin-bottom: 10px;
+}
+.sim-head h2 { margin: 0; }
+.sim-head .page-sub { margin: 4px 0 0; }
+.sim-head-actions { gap: 8px; flex-wrap: wrap; }
+/* Sans cette règle, le display:inline-flex des .btn écraserait
+   l'attribut hidden de « Recharger » et « Plein écran ». */
+.sim-head-actions .btn[hidden] { display: none; }
+
+/* Cadre du jeu : un 16/9 stable, le temps que les shaders compilent. */
+.sim-frame-wrap {
+    position: relative;
+    aspect-ratio: 16 / 9;
+    min-height: 320px;
+    margin-top: 12px;
+    background: #05080f;
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-card);
+    overflow: hidden;
+}
+.sim-frame-wrap[hidden] { display: none; }
+/* En plein écran, le cadre doit remplir l'écran sans bandes. */
+.sim-frame-wrap:fullscreen,
+.sim-frame-wrap:-webkit-full-screen {
+    aspect-ratio: auto;
+    min-height: 0;
+    width: 100%;
+    height: 100%;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+}
+.sim-frame {
+    display: block;
+    width: 100%;
+    height: 100%;
+    border: 0;
+}
+/* Rappel des crédits sous le cadre (licence MIT). */
+.sim-foot { margin-top: 10px; font-size: 0.74rem; }
+.sim-foot a { color: var(--accent-cyan); }
+
+/* Panneau d'incompatibilité WebGPU : même registre qu'une carte, mais avec
+   une liseré d'alerte pour ne pas passer pour une simple remarque. */
+.sim-compat { border-color: color-mix(in srgb, var(--warning) 45%, var(--border-color)); }
+.sim-compat h3 { color: var(--warning); }
+.sim-compat p { font-size: 0.84rem; line-height: 1.6; color: var(--text-secondary); }
+.sim-fixes { margin: 12px 0 0; padding-left: 20px; display: grid; gap: 10px; }
+.sim-fixes li { font-size: 0.8rem; line-height: 1.7; color: var(--text-dim); }
+.sim-fixes a { color: var(--accent-cyan); word-break: break-all; }
+.sim-fixes code { font-size: 0.76rem; }
+.sim-cmd {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 6px;
+    padding: 6px 10px;
+    background: var(--panel-faint);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+}
+.sim-cmd code { color: var(--accent-cyan); user-select: all; }
+
+/* Raccourcis clavier du jeu (section Paramètres). */
+.sim-keys { display: grid; gap: 8px; }
+.sim-keys span {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    font-size: 0.82rem;
+    color: var(--text-secondary);
+}
+.sim-keys kbd {
+    flex: 0 0 58px;
+    padding: 3px 8px;
+    font-family: var(--font-title);
+    font-size: 0.68rem;
+    letter-spacing: 1px;
+    text-align: center;
+    color: var(--accent-cyan);
+    background: var(--panel-faint);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+}
+
+/* Crédits : bloc plus discret (licence MIT du projet d'origine). */
+.sim-credits p { font-size: 0.84rem; line-height: 1.7; color: var(--text-secondary); }
+.sim-credits ul { margin: 10px 0 0; padding-left: 20px; }
+.sim-credits li { font-size: 0.8rem; line-height: 1.8; color: var(--text-dim); }
+.sim-credits a { color: var(--accent-cyan); }
+
 /* ===== RESPONSIVE (deux points de rupture) ===== */
 @media (max-width: 768px) {
     .nav-grid { grid-template-columns: repeat(2, 1fr); gap: 14px; }
@@ -1711,6 +1821,9 @@ output {
     .video-stage.mode-duo { grid-template-columns: 1fr; grid-template-rows: 1fr 1fr; aspect-ratio: 3 / 4; }
     .status-badges .badge { font-size: 0.6rem; padding: 3px 8px; }
     #badge-ws { display: none; }
+    .sim-head-actions { width: 100%; }
+    .sim-head-actions .btn { flex: 1 1 auto; }
+    .sim-frame-wrap { aspect-ratio: 4 / 3; min-height: 220px; }
 }
 @media (max-width: 480px) {
     .videos-grid { grid-template-columns: 1fr; }

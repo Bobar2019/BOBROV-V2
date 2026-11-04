@@ -1,0 +1,76 @@
+/* ── Télémétrie de bord (reprise du cockpit) ───────────────────────────────
+   The instruments laid over the onboard camera are the real vehicle's: the same markup
+   (.hud-layer / .hud-el / .hud-canvas) and the same rules as the cockpit's HUD in
+   static/style.css. What is missing is only the chrome of the cockpit's "Mise en page"
+   mode (outlines, labels, size handle), and what is added is the fade that follows the
+   boarding: in the cockpit the layer is always up, here it belongs to one camera. */
+
+.hud-layer {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 320ms var(--tw-ease), visibility 0s linear 320ms;
+}
+
+.hud-layer.is-on {
+    opacity: 1;
+    visibility: visible;
+    transition-delay: 0s;
+}
+
+/* the start screen and photo mode keep the view clear */
+.tw-root.is-photo .hud-layer,
+.tw-root.is-starting .hud-layer {
+    opacity: 0;
+    visibility: hidden;
+}
+
+.hud-el {
+    position: absolute;
+    opacity: var(--hud-o, 0.92);
+    transition: opacity 0.15s;
+}
+
+.hud-el.off { display: none; }
+
+/* The cockpit draws on a dark video feed; the island is a bright teal, and thin cyan on it is
+   nearly invisible. A dark halo under the strokes (one filter, one composited layer per
+   instrument) buys the contrast back without touching the instruments themselves. */
+.hud-el .hud-canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    filter: drop-shadow(0 0 1.5px rgba(2, 12, 18, 0.85)) drop-shadow(0 0 6px rgba(2, 12, 18, 0.35));
+}
+
+/* The settings rail runs down the right edge, where the cockpit puts its depth tape: an
+   instrument that reaches that edge steps in by the width of the rail (both are measured in
+   --tw-u, so the clearance holds at any window size). The band comes from the layout itself
+   (RovTelemetry._place), which is config.json's: nothing steps in that the pilot did not put
+   there. */
+.hud-el[data-right='1'] { transform: translateX(calc(-56 * var(--tw-u))); }
+
+/* The simulator's own chrome stays above the instruments: it is read (notifications, frame
+   rate, mode, tool rail), the instruments are looked through. */
+.tw-tl,
+.tw-toasts,
+.tw-rail { z-index: 21; }
+
+@media (max-width: 560px) {
+
+    /* the cockpit's layout is in % of the screen: on a phone the top-left block takes the whole
+       width, so an instrument laid in the top band drops under it */
+    .hud-el[data-hud='heading'][data-top='1'] { transform: translateY(calc(58 * var(--tw-u))); }
+
+}
+
+@media (max-height: 520px) {
+
+    .hud-el[data-right='1'] { transform: translateX(calc(-56 * var(--tw-u))) scale(0.86); transform-origin: 100% 50%; }
+
+}

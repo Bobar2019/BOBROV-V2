@@ -13,12 +13,12 @@ import threading
 import time
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, HTTPException, Response
 from fastapi.staticfiles import StaticFiles
 
 from app import __version__, network, stereo, video, videos
 from app.config import PROJECT_ROOT, get_config
-from app.routers import api_config, api_rov, api_sim_assets, api_system
+from app.routers import api_bugs, api_config, api_rov, api_system
 from app.serial_link import get_serial_link
 
 logging.basicConfig(
@@ -76,16 +76,37 @@ class NoCacheStaticFiles(StaticFiles):
         return response
 
 
+class RapportBugStaticFiles(NoCacheStaticFiles):
+    """Dossier ``Rapport_bug/`` : page de rapports + module 🐛, sans ``data/``.
+
+    ``data/rapports_bug.json`` contient le texte libre des rapports : il doit
+    rester inaccessible en HTTP, comme le protégeait le ``.htaccess`` du
+    dossier d'origine. Seul ``app/routers/api_bugs.py`` y accède.
+    """
+
+    async def get_response(self, path: str, scope) -> Response:
+        if path == "data" or path.startswith("data/"):
+            raise HTTPException(status_code=404, detail="Not Found")
+        return await super().get_response(path, scope)
+
+
 app = FastAPI(title="BOBROV", version=__version__, lifespan=lifespan)
 
 app.include_router(api_system.router)
 app.include_router(api_config.router)
-app.include_router(api_sim_assets.router)
 app.include_router(api_rov.router)
+app.include_router(api_bugs.router)
 app.include_router(video.router)
 app.include_router(videos.router)
 app.include_router(stereo.router)
 app.include_router(network.router)
+
+# Page de rapports de bug (Rapport_bug/bugs.html) et son module flottant 🐛.
+# Monté AVANT le SPA « / » ci-dessous, sinon static/index.html répondrait
+# à leur place ; le sous-dossier data/ est refusé par le montage lui-même.
+app.mount("/Rapport_bug",
+          RapportBugStaticFiles(directory=PROJECT_ROOT / "Rapport_bug", html=True),
+          name="rapport_bug")
 
 # SPA servie depuis static/ (index.html + style.css + app.js).
 # Monté en dernier : les routes /api/... ci-dessus restent prioritaires.

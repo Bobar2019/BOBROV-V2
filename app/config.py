@@ -179,6 +179,10 @@ DEFAULTS: dict = {
             "motor_h": True,
         },
         "hud": {
+            # Sens des trois axes d'attitude : un capteur monté à l'envers se corrige ici, une
+            # fois pour les deux écrans (HUD du Cockpit, simulateur) — inverser = lire l'axe
+            # en négatif (le cap miroir, N restant à 0°).
+            "invert": {"roll": False, "pitch": False, "heading": False},
             "elements": {
                 "horizon":  {"x": 37.0, "y": 12.0, "w": 26.0, "h": 40.0, "opacity": 0.92,
                              "color": "#00d9ff", "weight": 1.0, "font": 1.0},
@@ -213,7 +217,13 @@ DEFAULTS: dict = {
         },
     },
     "videos": {"folder": "videos", "auto_record": False},
-    "simulator": {"enabled": False},
+    # Le simulateur a son propre sens d'axes (dossier « ROV réel » de son panneau) : celui du
+    # cockpit ne corrige que son HUD sur la vidéo, la scène 3D se règle ici (roulis, tangage,
+    # cap — inverser = tourner le modèle dans l'autre sens pour cet axe).
+    "simulator": {
+        "enabled": False,
+        "real": {"invert": {"roll": False, "pitch": False, "heading": False}},
+    },
     "safety": {"watchdog_ms": 500, "surface_pressure_mbar": 1013.25, "neutral_us": 1500},
 }
 
@@ -431,6 +441,13 @@ def _validate(cfg: dict) -> None:
     for key, value in cockpit["overlay"].items():
         _require(isinstance(value, bool), f"cockpit.overlay.{key} : booléen attendu")
 
+    invert = cockpit["hud"]["invert"]
+    _require(isinstance(invert, dict),
+             "cockpit.hud.invert : objet {roll, pitch, heading} attendu")
+    for axis in ("roll", "pitch", "heading"):
+        _require(isinstance(invert.get(axis), bool),
+                 f"cockpit.hud.invert.{axis} : booléen attendu")
+
     hud_elements = cockpit["hud"]["elements"]
     _require(isinstance(hud_elements, dict) and bool(hud_elements),
              "cockpit.hud.elements : objet non vide attendu")
@@ -466,6 +483,10 @@ def _validate(cfg: dict) -> None:
     _require(isinstance(videos["auto_record"], bool), "videos.auto_record : booléen attendu")
 
     _require(isinstance(cfg["simulator"]["enabled"], bool), "simulator.enabled : booléen attendu")
+    sim_invert = cfg["simulator"]["real"]["invert"]
+    _require(isinstance(sim_invert, dict) and all(
+        isinstance(sim_invert.get(axis), bool) for axis in ("roll", "pitch", "heading")),
+        "simulator.real.invert : objet {roll, pitch, heading} de booléens attendu")
 
     safety = cfg["safety"]
     _require(_is_int(safety["watchdog_ms"]) and 100 <= safety["watchdog_ms"] <= 5000,

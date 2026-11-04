@@ -7,8 +7,8 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-    <meta name="apple-mobile-web-app-title" content="BOBROV">
-    <title>BOBROV — Cockpit</title>
+    <meta name="apple-mobile-web-app-title" content="BOBROV V2">
+    <title>BOBROV V2 — Cockpit</title>
     <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%23131417'/><text y='72' x='50' font-family='Arial' font-size='40' font-weight='bold' fill='%2300d9ff' text-anchor='middle'>BR</text></svg>">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -23,13 +23,12 @@
         })();
     </script>
     <link rel="stylesheet" href="style.css">
-    <link rel="stylesheet" href="sim/sim.css">
 </head>
 <body>
 
     <!-- ===== TOPBAR : logo + badges live + bascule de thème ===== -->
     <header id="topbar">
-        <div class="logo">BOBROV</div>
+        <div class="logo">BOBROV V2</div>
         <div class="topbar-right">
             <div class="status-badges">
                 <span id="badge-serial" class="badge badge-off" title="Liaison série ESP32-S3">SÉRIE ✕</span>
@@ -127,6 +126,13 @@
             <a class="nav-tile" data-tile-id="glasses" data-target="section-glasses" href="#section-glasses">
                 <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="6.5" cy="14" r="3.5"></circle><circle cx="17.5" cy="14" r="3.5"></circle><path d="M10 13.6c.7-.9 3.3-.9 4 0"></path><path d="M3.2 12.4 5 6.5h3.6M20.8 12.4 19 6.5h-3.6"></path></svg>
                 <span>Lunettes AR</span>
+            </a>
+            <!-- Page autonome (hors SPA) : data-href est suivi par
+                 initNavigation(), qui quitte le cockpit. -->
+            <a class="nav-tile" data-tile-id="bugs" data-href="/Rapport_bug/bugs.html" href="/Rapport_bug/bugs.html"
+               title="Lister, compléter et supprimer les rapports de bug et d'interface">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m8 2 1.88 1.88"></path><path d="M14.12 3.88 16 2"></path><path d="M9 7.13v-1a3.003 3.003 0 1 1 6 0v1"></path><path d="M12 20c-3.3 0-6-2.7-6-6v-3a4 4 0 0 1 4-4h4a4 4 0 0 1 4 4v3c0 3.3-2.7 6-6 6"></path><path d="M12 20v-9"></path><path d="M6.53 9C4.6 8.8 3 7.1 3 5"></path><path d="M6 13H2"></path><path d="M3 21c0-2.1 1.7-3.9 3.8-4"></path><path d="M20.97 5c0 2.1-1.6 3.8-3.5 4"></path><path d="M22 13h-4"></path><path d="M17.2 17c2.1.1 3.8 1.9 3.8 4"></path></svg>
+                <span>Rapports de bug</span>
             </a>
         </nav>
     </main>
@@ -802,9 +808,8 @@
             </div>
             <p class="hint pad-capture-hint" id="pad-capture-hint" hidden></p>
             <div id="pad-actions" class="pad-fn-list"></div>
-            <p class="hint">Le Sub Simulator lit directement ces associations. Tant qu'une fonction n'est
-            pas associée, il utilise son profil par défaut sur la première manette (△ armer · ○ dry-run ·
-            □ lumières · Options E-Stop · Share RAZ · Croix retour surface).</p>
+            <p class="hint">Ces associations pilotent le ROV et le HUD. Le simulateur Tidewater,
+            lui, conserve ses commandes clavier d'origine (voir Paramètres → Sub Simu).</p>
         </div>
 
         <div class="card">
@@ -994,6 +999,20 @@
             « Mise en page » ouvre le Cockpit en mode réglage : glisser = position, poignée = taille,
             molette = transparence ; couleur, finesse des traits et taille des textes par instrument dans sa
             barre, puis « Enregistrer » pour écrire la disposition dans config.json.</p>
+            <p class="hint">Sens des axes d'attitude — à cocher si le capteur est monté à l'envers :
+            le roulis part du mauvais côté, le nez monte quand il descend, ou le cap tourne à contresens.
+            Le réglage vaut pour le HUD du Cockpit comme pour le simulateur.</p>
+            <div class="settings-grid switch-grid">
+                <label class="switch-label">Inverser le roulis
+                    <input type="checkbox" id="ovl-invert-roll" class="switch">
+                </label>
+                <label class="switch-label">Inverser le tangage
+                    <input type="checkbox" id="ovl-invert-pitch" class="switch">
+                </label>
+                <label class="switch-label">Inverser le cap
+                    <input type="checkbox" id="ovl-invert-heading" class="switch">
+                </label>
+            </div>
             <div class="row-end">
                 <button id="btn-hud-layout" class="btn btn-primary" type="button">Mise en page…</button>
                 <button id="btn-ovl-save" class="btn btn-success" type="button">Enregistrer</button>
@@ -1036,12 +1055,14 @@
         </div>
     </section>
 
-    <!-- ===== SECTION SUB SIMU (configuration du simulateur) ===== -->
+    <!-- ===== SECTION SUB SIMU (réglages du simulateur) ===== -->
     <section id="section-sim-config" class="section-panel page-container" style="display:none">
         <h2>Sub Simu</h2>
-        <p class="page-sub">Configuration du simulateur d'entraînement (étape 10 de la feuille de route).</p>
+        <p class="page-sub">Réglages du simulateur d'entraînement — le jeu 3D <b>Tidewater</b> intégré au
+        cockpit, servi comme page autonome depuis <code>/sim_tidewater/</code>.</p>
 
         <div class="card">
+            <h3>Accès</h3>
             <div class="settings-grid">
                 <label class="switch-label">Simulateur activé
                     <input type="checkbox" id="sim-enabled" class="switch">
@@ -1049,31 +1070,148 @@
             </div>
             <p class="hint" id="sim-state">—</p>
             <p class="hint">
-                Étape 10 : le Sub Simulator remplira la télémétrie (profondeur, attitude, batteries) même
-                sans l'ESP32 branché, pour s'entraîner avant de plonger. Le réglage est conservé dès maintenant.
+                Le simulateur s'ouvre en plein cadre (voir la tuile Sub Simulator de l'accueil) : île, océan
+                à vagues réelles et navigation au bateau, rendus en WebGPU. Il demande un navigateur récent
+                (Chrome, Edge ou Safari) et un GPU capable ; le premier lancement compile plusieurs
+                centaines de shaders et peut prendre une minute. WebGPU n'étant exposé qu'aux contextes
+                sécurisés, ouvrez le cockpit sur <code>https://&lt;pi&gt;:8443</code> ou via un tunnel SSH.
             </p>
             <div class="row-end">
                 <button id="btn-sim-save" class="btn btn-success" type="button">Enregistrer</button>
             </div>
         </div>
-    </section>
 
-    <!-- ===== SECTION SUB SIMULATOR (la tuile de l'accueil ouvrira ici) ===== -->
-    <section id="section-simulator" class="section-panel page-container" style="display:none">
-        <h2>Sub Simulator</h2>
-        <p class="page-sub">Simulateur d'entraînement avant plongée, style flight simulator — en construction.</p>
-
+        <!-- Diagnostic WebGPU : le jeu refuse de démarrer si l'une des trois
+             lignes n'est pas au vert (le navigateur masque l'API en HTTP simple). -->
         <div class="card">
-            <h3>État</h3>
-            <p class="hint" id="sim-state-top">—</p>
-            <p class="hint">
-                L'écran de simulation (vue 3D/2D du sous-marin, télémétrie simulée, pannes scriptées)
-                arrivera à l'étape 10 : l'entraînement se fera ici, sans matériel, avant chaque plongée.
-            </p>
+            <h3>Compatibilité WebGPU</h3>
+            <div class="sys-grid">
+                <div class="sys-row"><span class="sys-key">Contexte sécurisé</span><span class="sys-value" id="sim-compat-secure">—</span></div>
+                <div class="sys-row"><span class="sys-key">API WebGPU</span><span class="sys-value" id="sim-compat-api">—</span></div>
+                <div class="sys-row"><span class="sys-key">Adaptateur GPU</span><span class="sys-value" id="sim-compat-adapter">—</span></div>
+            </div>
+            <p class="hint">Le jeu ne démarre que si les trois lignes sont au vert. En HTTP simple
+                (<code>http://192.168.1.128:8080</code>), le navigateur masque WebGPU : ouvrez plutôt
+                <code>https://192.168.1.128:8443</code> (certificat auto-signé du Pi), ou passez par
+                <code>http://localhost:8080</code> avec un tunnel SSH, ou déclarez l'origine de confiance
+                dans <code>chrome://flags</code>.</p>
             <div class="row-end">
-                <button id="btn-sim-open-config" class="btn btn-primary" type="button">Configurer le simulateur</button>
+                <button id="btn-sim-check" class="btn btn-ghost" type="button">Retester</button>
             </div>
         </div>
+
+        <!-- Structure des futurs réglages : les champs sont en place mais
+             volontairement inactifs tant que le moteur ne les consomme pas.
+             Ils éviteront de re-câbler la page quand les options arriveront. -->
+        <div class="card">
+            <h3>Affichage et performances <span class="hint">(à venir)</span></h3>
+            <div class="settings-grid">
+                <label>Qualité de rendu
+                    <select id="sim-quality" disabled>
+                        <option value="auto">Automatique (recommandé)</option>
+                        <option value="high">Élevée</option>
+                        <option value="medium">Moyenne</option>
+                        <option value="low">Basse</option>
+                    </select>
+                </label>
+                <label>Mode d'affichage
+                    <select id="sim-display" disabled>
+                        <option value="embed">Intégré au cockpit</option>
+                        <option value="full">Plein écran</option>
+                    </select>
+                </label>
+                <label class="switch-label">Compteur de FPS
+                    <input type="checkbox" id="sim-show-fps" class="switch" disabled>
+                </label>
+                <label class="switch-label">Son du jeu
+                    <input type="checkbox" id="sim-audio" class="switch" disabled checked>
+                </label>
+            </div>
+            <p class="hint">
+                Ces réglages piloteront l'URL du simulateur (qualité, résolution dynamique, audio) ; rien
+                n'est encore appliqué.
+            </p>
+        </div>
+
+        <div class="card">
+            <h3>Commandes du jeu</h3>
+            <div class="sim-keys">
+                <span><kbd>E</kbd> monter à bord / prendre la barre</span>
+                <span><kbd>R</kbd> sortir la canne</span>
+                <span><kbd>I</kbd> glacière et journal des prises</span>
+                <span><kbd>Échap</kbd> libérer la souris</span>
+            </div>
+            <p class="hint">
+                Commandes du jeu d'origine, inchangées : la simulation n'est pas encore adaptée au
+                pilotage du ROV.
+            </p>
+        </div>
+
+        <div class="card sim-credits">
+            <h3>Crédits et licence</h3>
+            <p>
+                <b>Tidewater</b> — jeu 3D d'île et de pêche, moteur de rendu WebGPU maison.<br>
+                © 2026 <b>DRG Software Solutions LLC</b> (David Greenheck).<br>
+                Distribué sous <b>licence MIT</b>.
+            </p>
+            <ul>
+                <li>Code source : <a href="https://github.com/dgreenheck/tidewater" target="_blank" rel="noopener noreferrer">github.com/dgreenheck/tidewater</a></li>
+                <li>Texte de la licence : <a href="/sim_tidewater/LICENSE" target="_blank" rel="noopener noreferrer">sim_tidewater/LICENSE</a></li>
+                <li>Ressources tierces (audio CC0, modèles Poly Haven, polices OFL) :
+                    <a href="/sim_tidewater/CREDITS.md" target="_blank" rel="noopener noreferrer">sim_tidewater/CREDITS.md</a></li>
+            </ul>
+            <p class="hint">
+                Fichiers copiés tels quels depuis le dépôt d'origine ; seuls les chemins d'assets ont été
+                rendus relatifs à la page (le projet source est normalement servi par Vite).
+            </p>
+        </div>
+    </section>
+
+    <!-- ===== SECTION SIMULATEUR (Tidewater dans un cadre plein écran) ===== -->
+    <section id="section-simulator" class="section-panel page-container" style="display:none">
+        <div class="sim-head">
+            <div>
+                <h2>Tidewater</h2>
+                <p class="page-sub">Simulateur d'entraînement : île, océan et navigation au bateau, en temps réel.</p>
+            </div>
+            <div class="row-end sim-head-actions">
+                <button id="btn-sim-launch" class="btn btn-primary" type="button">Lancer la simulation</button>
+                <button id="btn-sim-reload" class="btn btn-ghost" type="button" hidden>Recharger</button>
+                <button id="btn-sim-full" class="btn btn-ghost" type="button" hidden>Plein écran</button>
+                <button id="btn-sim-open-config" class="btn btn-ghost" type="button">Réglages</button>
+            </div>
+        </div>
+        <p class="hint" id="sim-state-top">—</p>
+        <!-- Panneau d'incompatibilité : WebGPU n'est exposé qu'aux contextes
+             sécurisés, or le cockpit est généralement ouvert en HTTP simple
+             sur l'IP du Pi (le jeu répondrait « WebGPU is not available »). -->
+        <div class="card sim-compat" id="sim-compat" hidden>
+            <h3>WebGPU indisponible sur cette page</h3>
+            <p id="sim-compat-reason">—</p>
+            <ul class="sim-fixes">
+                <li><b>Ouvrir le cockpit en HTTPS.</b> Le Pi sert aussi le cockpit sur le port 8443 avec un
+                    certificat auto-signé : chargez
+                    <a id="sim-tls-link" href="https://192.168.1.128:8443/" target="_blank" rel="noopener noreferrer">https://192.168.1.128:8443/</a>
+                    et acceptez une fois l'avertissement (« Avancé » puis « Continuer »). WebGPU y est disponible.</li>
+                <li><b>Passer par localhost.</b> Sur votre ordinateur, ouvrez un tunnel SSH vers le Pi
+                    puis chargez <code>http://localhost:8080</code> (contexte sécurisé) :
+                    <span class="sim-cmd">
+                        <code id="sim-cmd-ssh">ssh -L 8080:localhost:8080 bob@192.168.1.128</code>
+                        <button id="btn-sim-copy-ssh" class="btn btn-mini" type="button">Copier</button>
+                    </span>
+                </li>
+                <li><b>Déclarer l'origine de confiance.</b> Dans Chrome, ouvrez
+                    <code>chrome://flags/#unsafely-treat-insecure-origin-as-secure</code>, ajoutez
+                    <code>http://192.168.1.128:8080</code>, activez le drapeau puis relancez le navigateur.</li>
+                <li><b>Vérifier le moteur.</b> WebGPU demande Chrome 113+ (macOS 13 minimum), Edge 113+
+                    ou Safari 18+, avec l'accélération matérielle active.</li>
+            </ul>
+        </div>
+        <!-- L'iframe n'est créée qu'au premier clic : le jeu réserve la mémoire
+             GPU et compile ses shaders (environ une minute au premier lancement). -->
+        <div class="sim-frame-wrap" id="sim-frame-wrap" hidden></div>
+        <p class="hint sim-foot">Moteur et contenu : <b>Tidewater</b> © 2026 DRG Software Solutions LLC
+            — licence MIT · <a href="https://github.com/dgreenheck/tidewater" target="_blank" rel="noopener noreferrer">code source</a></p>
     </section>
 
     <!-- ===== SECTION SYSTÈME ===== -->
@@ -1128,7 +1266,7 @@
     </a>
 
     <footer class="app-footer">
-        <span>BOBROV <span id="app-version">v—</span></span>
+        <span>BOBROV V2 <span id="app-version">v—</span></span>
         <span aria-hidden="true"> | </span>
         <span>DERO DIDIER</span>
         <span aria-hidden="true"> | </span>
@@ -1146,18 +1284,14 @@
 
     <div id="toast-container" class="toast-container"></div>
 
+    <!-- Rapports de bug : bouton flottant 🐛 sur toutes les pages du cockpit.
+         Le module ouvre /Rapport_bug/bugs.html et envoie ses rapports à
+         l'API /api/bugs (app/routers/api_bugs.py). Charge avant app.js. -->
+    <script src="/Rapport_bug/js/bug-report.js?v=4"></script>
     <script src="app.js"></script>
-    <!-- Sub Simulator : Three.js vendorisé localement (aucun CDN au runtime).
-         Importmap additive, lue uniquement par les modules du dossier sim/. -->
-    <script type="importmap">
-        {
-            "imports": {
-                "three": "/sim/vendor/three.module.js",
-                "three/addons/": "/sim/vendor/addons/"
-            }
-        }
-    </script>
-    <!-- Sub Simulator : module isolé (dossier sim/, aucun impact sur le reste) -->
-    <script type="module" src="sim/sim.js"></script>
+    <!-- Simulateur : Tidewater est une page autonome servie depuis
+         /sim_tidewater/ et chargée à la demande dans une iframe
+         (voir section-simulator et lancerSimulateur dans app.js). Aucun
+         module n'est chargé ici : ni importmap, ni Three.js. -->
 </body>
 </html>

@@ -100,6 +100,12 @@ function setText(el, value) {
     if (el && el.textContent !== String(value)) el.textContent = value;
 }
 
+/** Affiche/masque un nœud par l'attribut hidden (les blocs concernés
+ *  déclarent « [hidden] { display: none } » pour gagner contre leur display). */
+function setHidden(node, hidden) {
+    if (node) node.hidden = !!hidden;
+}
+
 function fmtBytes(n) {
     if (!Number.isFinite(n)) return '—';
     const units = ['o', 'Ko', 'Mo', 'Go', 'To'];
@@ -224,6 +230,7 @@ function showSection(id, origin = 'dashboard') {
     if (id === 'section-videos') { loadVideos().catch((error) => toast('Médiathèque : ' + error.message, 'err')); }
     if (id === 'section-manette') { openPadSection(); startPadTest(); }
     if (id === 'section-simulator') renderSimTop();
+    if (id === 'section-sim-config') renderSimCompat();
     if (id === 'section-config') { renderTileOrderInfo(TILE_GRIDS.main); renderTileOrderInfo(TILE_GRIDS.params); }
 }
 
@@ -243,6 +250,9 @@ function initNavigation() {
             const grid = tile.closest('.nav-grid');
             if (grid && grid.classList.contains('editing')) return;   // édition : pas de navigation
             event.preventDefault();
+            /* Tuile qui sort du SPA (page autonome du dossier Rapport_bug) :
+               data-href est une vraie navigation, pas une section à afficher. */
+            if (tile.dataset.href) { window.location.assign(tile.dataset.href); return; }
             const target = tile.dataset.target || '';
             if (target === 'parameters') showParameters();
             else showSection(target, grid && grid.id === 'params-grid' ? 'parameters' : 'dashboard');
@@ -250,6 +260,21 @@ function initNavigation() {
     });
     byId('btn-back').addEventListener('click', (event) => { event.preventDefault(); goBack(); });
     document.addEventListener('keydown', (event) => { if (event.key === 'Escape') goBack(); });
+}
+
+/** Le bouton retour se cale SOUS la topbar collante : sa hauteur change
+ *  quand les badges passent à la ligne, on la publie donc en variable CSS
+ *  (--topbar-h) au lieu de coder un décalage en dur. */
+function positionnerBoutonRetour() {
+    const topbar = byId('topbar');
+    if (topbar) document.documentElement.style.setProperty('--topbar-h', topbar.offsetHeight + 'px');
+}
+
+function initRetourPosition() {
+    positionnerBoutonRetour();
+    window.addEventListener('resize', positionnerBoutonRetour);
+    const topbar = byId('topbar');
+    if (topbar && window.ResizeObserver) new ResizeObserver(positionnerBoutonRetour).observe(topbar);
 }
 
 /* =========================================================================
@@ -388,7 +413,7 @@ function watchServerReturn({ title, deadlineS }) {
  * ========================================================================= */
 
 const DEFAULT_TILE_ORDER = ['cockpit', 'videos', 'parameters', 'simulator'];
-const DEFAULT_PARAM_ORDER = ['cameras', 'align3d', 'network', 'config', 'manette', 'system', 'sim-config', 'glasses'];
+const DEFAULT_PARAM_ORDER = ['cameras', 'align3d', 'network', 'config', 'manette', 'system', 'sim-config', 'glasses', 'bugs'];
 
 /** Les deux grilles de tuiles : accueil (#nav-grid) et paramètres (#params-grid). */
 const TILE_GRIDS = {
@@ -1825,6 +1850,9 @@ function capturePhoto() {
 
 const HUD_ORDER = ['horizon', 'heading', 'depth', 'temperature', 'arm_mode', 'gauges', 'grip',
                    'aux', 'voltage', 'motor_v', 'motor_h'];
+// Sens des axes d'attitude (cockpit.hud.invert) : les trois dimensions du capteur, dans
+// l'ordre où la carte « HUD télémétrie » les propose.
+const HUD_AXES = ['roll', 'pitch', 'heading'];
 const HUD_COLOR = '#00d9ff';
 const HUD_WARN = '#ffb300';
 const HUD_DANGER = '#ff2d2d';     // virage rouge de la jauge de profondeur
@@ -1922,16 +1950,29 @@ function hudLerpAngle(from, to, alpha) {
 
 /* -- Télémétrie → valeurs d'affichage --------------------------------------- */
 
+/** Sens de lecture de chaque axe (±1) d'après « cockpit.hud.invert » : un capteur monté à
+    l'envers (le roulis qui part du mauvais côté, le nez qui monte quand il descend, le cap
+    à contresens) se corrige ici, une fois — le simulateur lit le même réglage. */
+function hudAxisSigns() {
+    const invert = (CONFIG && CONFIG.cockpit && CONFIG.cockpit.hud && CONFIG.cockpit.hud.invert) || {};
+    return {
+        roll: invert.roll === true ? -1 : 1,
+        pitch: invert.pitch === true ? -1 : 1,
+        heading: invert.heading === true ? -1 : 1,
+    };
+}
+
 /** Trame 0x02 → { roll, pitch, yaw (°), depth (m), température, tensions/courants, PWM }. */
 function hudFrameFromTelemetry(telemetry) {
     if (!telemetry) return null;
     const [w, x, y, z] = telemetry.quat || [1, 0, 0, 0];
     const ref = Number((CONFIG && CONFIG.safety && CONFIG.safety.surface_pressure_mbar) || 1013.25);
     const power = telemetry.power || [];
+    const sign = hudAxisSigns();
     return {
-        roll: Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y)) * 180 / Math.PI,
-        pitch: Math.asin(hudClamp(2 * (w * y - z * x), -1, 1)) * 180 / Math.PI,
-        yaw: Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)) * 180 / Math.PI,
+        roll: sign.roll * Math.atan2(2 * (w * x + y * z), 1 - 2 * (x * x + y * y)) * 180 / Math.PI,
+        pitch: sign.pitch * Math.asin(hudClamp(2 * (w * y - z * x), -1, 1)) * 180 / Math.PI,
+        yaw: sign.heading * Math.atan2(2 * (w * z + x * y), 1 - 2 * (y * y + z * z)) * 180 / Math.PI,
         depth: (Number(telemetry.pressure_mbar ?? ref) - ref) / 100.5,   // 1 m d'eau ≈ 100,5 mbar
         temperature: Number(telemetry.temperature_c) || 0,
         vbat: (power[0] || 0) / 1000,     // mV → V
@@ -2433,8 +2474,8 @@ function hudPwmFrame(f, count) {
 }
 
 /* Schéma « vue de dessus » : ROV 8 propulseurs, nez à droite. Positions et
-   poussées positives viennent du mixage du firmware (motor_mixer.py, confirmé
-   par sim-mix.js) : 4 horizontaux en X à 45°, 4 verticaux en montée positive.
+   poussées positives viennent du mixage du firmware (motor_mixer.py) :
+   4 horizontaux en X à 45°, 4 verticaux en montée positive.
    Repère écran : x = avant (droite), y = bâbord (haut) ⇒ tribord = bas. */
 
 /** Position (unités schéma) et poussée positive (vecteur écran) par moteur. */
@@ -2989,14 +3030,17 @@ function resetHudEdit() {
     toast('Disposition par défaut restaurée — « Enregistrer » pour la conserver');
 }
 
-/** Persiste les cases « HUD télémétrie » de Config Cockpit (cockpit.overlay). */
-async function saveOverlayToggles() {
+/** Persiste les cases « HUD télémétrie » de Config Cockpit (cockpit.overlay) et le sens des
+    trois axes d'attitude (cockpit.hud.invert) — le simulateur lit le même réglage. */
+async function saveHudSettings() {
     const overlay = {};
     HUD_ORDER.forEach((id) => { overlay[id] = byId('ovl-' + id).checked; });
+    const invert = {};
+    HUD_AXES.forEach((axis) => { invert[axis] = byId('ovl-invert-' + axis).checked; });
     try {
-        await patchConfig({ cockpit: { overlay } });
+        await patchConfig({ cockpit: { overlay, hud: { invert } } });
         hudApplyOverlayVisibility();
-        toast('Incrustation télémétrie enregistrée');
+        toast('Incrustation télémétrie et sens des axes enregistrés');
     } catch (error) {
         toast('Incrustation refusée : ' + error.message, 'err');
     }
@@ -3165,7 +3209,7 @@ function initHud() {
         showSection('section-cockpit', 'parameters');
         startHudEdit();
     });
-    byId('btn-ovl-save').addEventListener('click', saveOverlayToggles);
+    byId('btn-ovl-save').addEventListener('click', saveHudSettings);
 }
 
 /* =========================================================================
@@ -3418,22 +3462,169 @@ function renderNetAccess() {
         : 'Cette session n\'emprunte aucune des adresses actives.');
 }
 
-/* -- Simulateur & formulaires ---------------------------------------------- */
+/* -- Simulateur (Tidewater) ------------------------------------------------- */
+
+/** Le jeu est une page autonome servie par le backend : on l'isole dans une
+ *  iframe pour que son contexte WebGPU, son clavier et son audio ne croisent
+ *  jamais ceux du SPA. Aucun module du jeu n'est importé ici. */
+const SIM_URL = '/sim_tidewater/index.html';
+/** Tunnel à lancer sur le poste client : http://localhost:8080 devient un
+ *  contexte sécurisé, seul cas où le navigateur expose navigator.gpu. */
+const SIM_SSH_CMD = 'ssh -L 8080:localhost:8080 bob@192.168.1.128';
+
+function simFrame() {
+    return byId('sim-frame');
+}
+
+/** Code du blocage WebGPU (`''` si le jeu peut démarrer).
+ *  WebGPU n'est exposé qu'aux contextes sécurisés : le cockpit ouvert en
+ *  HTTP sur l'IP du Pi masque `navigator.gpu`, et Tidewater répond alors
+ *  « WebGPU is not available in this browser ». */
+function simBlocageWebGPU() {
+    if (!window.isSecureContext) return 'page-http';
+    if (!navigator.gpu) return 'api-absente';
+    return '';
+}
+
+function expliquerSimBlocage(code) {
+    if (code === 'page-http') {
+        return 'Cette page est ouverte en HTTP simple (' + location.host + ') : le navigateur n\'expose '
+            + 'WebGPU qu\'aux contextes sécurisés (https, localhost ou 127.0.0.1).';
+    }
+    if (code === 'api-absente') {
+        return 'Ce navigateur n\'expose pas l\'API WebGPU (Chrome 113+, Edge 113+ ou Safari 18+, '
+            + 'accélération matérielle active).';
+    }
+    if (code === 'adaptateur') {
+        return 'Aucun adaptateur GPU utilisable : accélération matérielle désactivée ou pilote absent.';
+    }
+    return '';
+}
+
+/** Affiche le panneau d'explication dès que le blocage est connu ; renvoie le code. */
+function majPanneauCompat() {
+    const blocage = simBlocageWebGPU();
+    setHidden(byId('sim-compat'), !blocage);
+    if (blocage) {
+        setText(byId('sim-compat-reason'), expliquerSimBlocage(blocage));
+        // Même port HTTPS sur toutes les installations : on n'affiche que
+        // l'adresse réellement tapée (IP ou bobrov.local).
+        const lien = byId('sim-tls-link');
+        if (lien) {
+            const url = 'https://' + (location.hostname || 'localhost') + ':8443/';
+            lien.href = url;
+            lien.textContent = url;
+        }
+    }
+    return blocage;
+}
+
+/** Diagnostic « Compatibilité WebGPU » des paramètres (trois lignes). */
+async function renderSimCompat() {
+    const secure = byId('sim-compat-secure');
+    if (!secure) return;
+    setText(secure, (window.isSecureContext ? 'oui' : 'non') + ' — ' + location.origin);
+    setText(byId('sim-compat-api'), navigator.gpu ? 'disponible' : 'indisponible');
+    const cible = byId('sim-compat-adapter');
+    if (!navigator.gpu) { setText(cible, 'non testable — API absente'); return; }
+    setText(cible, 'test en cours…');
+    try {
+        const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+        setText(cible, adapter ? 'prêt' : 'aucun adaptateur');
+    } catch (error) {
+        setText(cible, 'erreur : ' + error.message);
+    }
+}
+
+/** Affiche « Lancer » ou le duo « Recharger / Plein écran » selon l'état. */
+function basculerBoutonsSim(lance) {
+    setHidden(byId('btn-sim-launch'), lance);
+    setHidden(byId('btn-sim-reload'), !lance);
+    setHidden(byId('btn-sim-full'), !lance);
+    setHidden(byId('sim-frame-wrap'), !lance);
+}
 
 function renderSimState() {
     const enabled = byId('sim-enabled').checked;
     setText(byId('sim-state'), enabled
-        ? 'Simulateur actif demandé — la télémétrie simulée sera branchée à l\'étape 10.'
-        : 'Simulateur inactif — la télémétrie provient de l\'ESP32-S3.');
+        ? 'Simulateur autorisé — la tuile Tidewater de l\'accueil ouvre la simulation.'
+        : 'Simulateur non autorisé — la tuile reste visible mais annoncée comme inactive.');
     renderSimTop();
 }
 
 /** Ligne d'état de la section Sub Simulator (tuile de l'accueil). */
 function renderSimTop() {
     const enabled = !!(CONFIG && CONFIG.simulator && CONFIG.simulator.enabled);
-    setText(byId('sim-state-top'), enabled
-        ? 'Simulateur activé dans les paramètres — écran de simulation à l\'étape 10.'
-        : 'Simulateur inactif — activez-le dans Paramètres → Sub Simu.');
+    const charge = !!simFrame();
+    const blocage = majPanneauCompat();
+    setText(byId('sim-state-top'), charge
+        ? 'Tidewater est chargé ci-dessous. Cliquez dans le cadre pour prendre la main (Échap libère la souris).'
+        : (blocage
+            ? 'Simulation impossible sur cette page — ' + expliquerSimBlocage(blocage)
+            : (enabled
+                ? 'Simulateur activé. « Lancer la simulation » ouvre Tidewater dans le cockpit.'
+                : 'Simulateur désactivé (Paramètres → Sub Simu) : le jeu reste lançable pour un essai.')));
+    basculerBoutonsSim(charge);
+    const lance = byId('btn-sim-launch');
+    if (lance) {
+        lance.disabled = !charge && !!blocage;
+        lance.title = !charge && blocage ? 'WebGPU indisponible sur cette page' : '';
+    }
+}
+
+/** Création paresseuse de l'iframe : le jeu réserve la mémoire GPU et compile
+ *  ses shaders (compte une minute au tout premier lancement). */
+async function lancerSimulateur() {
+    let blocage = simBlocageWebGPU();
+    if (!blocage && navigator.gpu) {
+        // Le jeu réclame un adaptateur : autant le savoir ici plutôt que de
+        // laisser l'iframe afficher son propre message d'erreur.
+        const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' })
+            .catch(() => null);
+        if (!adapter) blocage = 'adaptateur';
+    }
+    if (blocage) {
+        majPanneauCompat();
+        setText(byId('sim-compat-reason'), expliquerSimBlocage(blocage));
+        setHidden(byId('sim-compat'), false);
+        setText(byId('sim-state-top'), 'Simulation impossible sur cette page — ' + expliquerSimBlocage(blocage));
+        basculerBoutonsSim(false);
+        return;
+    }
+    setHidden(byId('sim-compat'), true);
+    if (!simFrame()) {
+        const frame = document.createElement('iframe');
+        frame.id = 'sim-frame';
+        frame.className = 'sim-frame';
+        frame.title = 'Tidewater — simulateur de navigation';
+        frame.allow = 'fullscreen; autoplay; gamepad';
+        frame.addEventListener('load', renderSimTop);
+        byId('sim-frame-wrap').appendChild(frame);
+        frame.src = SIM_URL;
+    }
+    basculerBoutonsSim(true);
+    setText(byId('sim-state-top'), 'Chargement de Tidewater… la compilation des shaders peut durer une minute.');
+}
+
+function rechargerSimulateur() {
+    const frame = simFrame();
+    if (!frame) { lancerSimulateur(); return; }
+    setText(byId('sim-state-top'), 'Rechargement de Tidewater…');
+    frame.src = SIM_URL + '?t=' + Date.now();   // force la page à repartir de zéro
+}
+
+function pleinEcranSimulateur() {
+    const wrap = byId('sim-frame-wrap');
+    if (!wrap) return;
+    const actuel = document.fullscreenElement || document.webkitFullscreenElement;
+    if (actuel) {
+        const sortie = document.exitFullscreen || document.webkitExitFullscreen;
+        if (sortie) Promise.resolve(sortie.call(document)).catch(() => {});
+        return;
+    }
+    const demande = wrap.requestFullscreen || wrap.webkitRequestFullscreen;
+    if (!demande) { toast('Plein écran non pris en charge par ce navigateur', 'err'); return; }
+    Promise.resolve(demande.call(wrap)).catch(() => toast('Plein écran refusé', 'err'));
 }
 
 /** Positionne un curseur et son <output> (formatage optionnel). */
@@ -3490,6 +3681,10 @@ function fillSettings() {
     HUD_ORDER.forEach((key) => {
         const box = byId('ovl-' + key);
         if (box) box.checked = (cockpit.overlay || {})[key] !== false;
+    });
+    HUD_AXES.forEach((axis) => {
+        const box = byId('ovl-invert-' + axis);
+        if (box) box.checked = ((cockpit.hud || {}).invert || {})[axis] === true;
     });
     renderTileOrderInfo(TILE_GRIDS.main);
     renderTileOrderInfo(TILE_GRIDS.params);
@@ -5771,9 +5966,14 @@ function initSettingsButtons() {
         if (headTrackerCapture) endHeadTrackerCapture();
     });
 
-    // Sub Simulator
+    // Sub Simulator — Tidewater dans une iframe
     byId('sim-enabled').addEventListener('change', renderSimState);
     byId('btn-sim-save').addEventListener('click', saveSimulator);
+    byId('btn-sim-launch').addEventListener('click', lancerSimulateur);
+    byId('btn-sim-reload').addEventListener('click', rechargerSimulateur);
+    byId('btn-sim-full').addEventListener('click', pleinEcranSimulateur);
+    byId('btn-sim-check').addEventListener('click', () => renderSimCompat());
+    byId('btn-sim-copy-ssh').addEventListener('click', () => copyText(SIM_SSH_CMD, 'Tunnel SSH copié'));
     byId('btn-sim-open-config').addEventListener('click', () => showSection('section-sim-config', 'parameters'));
 
     // Système
@@ -6381,6 +6581,7 @@ function initMediaUI() {
 async function init() {
     initThemeToggle();
     initNavigation();
+    initRetourPosition();
     initTileGrid(TILE_GRIDS.main);
     initTileGrid(TILE_GRIDS.params);
     initVideo();

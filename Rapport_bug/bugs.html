@@ -1,0 +1,916 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<meta name="theme-color" content="#05070a">
+<title>Rapports de bug</title>
+<style>
+  /* ============================================================
+     Styles POUR CETTE PAGE uniquement. Le module js/bug-report.js
+     injecte les siens (bouton, modale, bandeau) : il fonctionne
+     même sur une page qui ne charge aucune feuille de style.
+     ============================================================ */
+  :root {
+    --bg: #05070a;
+    --panneau: #0b141c;
+    --ligne: rgba(255, 255, 255, 0.09);
+    --cyan: #00D6F2;
+    --cyan-clair: #50E8F5;
+    --cyan-sombre: #00A3F7;
+    --txt: #e8eef1;
+    --txt-faible: #8b979e;
+    --txt-tres-faible: #6d7d8d;
+    --orange: #e8a06a;
+    --police: "Space Grotesk", "Inter", system-ui, -apple-system, sans-serif;
+    --police-texte: "Inter", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+    --mono: "JetBrains Mono", "SF Mono", Consolas, monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--txt);
+    font-family: var(--police-texte);
+    font-size: 15px;
+    line-height: 1.55;
+    background-image:
+      radial-gradient(1100px 600px at 12% -10%, rgba(0, 163, 247, 0.10), transparent 60%),
+      radial-gradient(900px 500px at 100% 0%, rgba(0, 214, 242, 0.07), transparent 55%);
+    background-attachment: fixed;
+  }
+  .mono { font-family: var(--mono); }
+  .app { max-width: 980px; margin: 0 auto; padding: 20px 18px 70px; }
+
+  /* ---- Barre supérieure ---- */
+  .app-barre {
+    display: flex; align-items: center; gap: 14px;
+    padding: 14px 0 18px; margin-bottom: 10px;
+    border-bottom: 1px solid var(--ligne);
+  }
+  .btn-retour {
+    flex: none; width: 38px; height: 38px; display: flex;
+    align-items: center; justify-content: center; border-radius: 12px;
+    border: 1px solid rgba(0, 214, 242, 0.3); color: var(--cyan-clair);
+    background: rgba(10, 16, 22, 0.7); text-decoration: none;
+  }
+  .app-titre { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+  .app-titre .mono {
+    font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--cyan);
+  }
+  .app-titre strong { font-family: var(--police); font-size: 19px; font-weight: 600; color: #fff; }
+  .app-actions { display: flex; gap: 10px; align-items: center; }
+  .app-actions form { margin: 0; }
+  .btn-lien {
+    border: none; background: none; padding: 4px; cursor: pointer;
+    color: var(--txt-faible); font: inherit; font-size: 13px;
+    text-decoration: underline; text-underline-offset: 3px;
+  }
+  .btn-lien:hover { color: var(--cyan-clair); }
+
+  /* ---- Sections ---- */
+  .rb-section { margin-top: 26px; }
+  .rb-section > h2 {
+    margin: 0 0 12px; font-family: var(--police);
+    font-size: 16px; font-weight: 600; color: #fff;
+  }
+  .rb-section > h2 .mono { font-size: 12px; color: var(--txt-tres-faible); }
+
+  /* ---- Contexte du rapport ---- */
+  #bug-contexte {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 8px 18px; padding: 14px 16px; margin-bottom: 14px;
+    background: rgba(0, 214, 242, 0.05); border: 1px solid rgba(0, 214, 242, 0.22);
+    border-radius: 14px; font-size: 13px; line-height: 1.5;
+  }
+  #bug-contexte .bug-cle { color: var(--txt-tres-faible); }
+  #bug-contexte .bug-val { color: var(--txt); word-break: break-word; }
+  #bug-element-carte {
+    grid-column: 1 / -1; padding: 10px 14px;
+    background: rgba(80, 232, 245, 0.07); border: 1px solid rgba(0, 214, 242, 0.30);
+    border-radius: 10px; font-family: var(--mono); font-size: 12px; color: #7fd8e8;
+  }
+  #bug-description { width: 100%; min-height: 120px; resize: vertical; }
+
+  /* ---- Champs et boutons ---- */
+  .label-champ { display: block; margin-bottom: 6px; font-size: 12px; color: var(--txt-faible); }
+  .champ {
+    width: 100%; padding: 12px 14px; border-radius: 12px;
+    border: 1px solid var(--ligne); background: rgba(0, 0, 0, 0.35);
+    color: var(--txt); font: inherit; font-size: 14px;
+  }
+  .champ:focus { outline: 2px solid var(--cyan); outline-offset: 1px; }
+  .btn-principal {
+    border: none; border-radius: 12px; padding: 12px 22px; cursor: pointer;
+    background: linear-gradient(150deg, var(--cyan-sombre), var(--cyan-clair));
+    color: #04121a; font: inherit; font-size: 14px; font-weight: 600;
+  }
+  .btn-principal:disabled { opacity: 0.55; cursor: default; }
+  .btn-ghost-sm {
+    padding: 8px 14px; border-radius: 10px; cursor: pointer;
+    border: 1px solid rgba(255, 255, 255, 0.14); background: rgba(255, 255, 255, 0.02);
+    color: #c9d4da; font: inherit; font-size: 12.5px;
+  }
+  .btn-ghost-sm:hover { border-color: rgba(0, 214, 242, 0.4); color: var(--cyan-clair); }
+  .btn-ghost-sm.confirme {
+    border-color: rgba(232, 160, 106, 0.55); color: var(--orange);
+    background: rgba(232, 160, 106, 0.12); font-weight: 600;
+  }
+  .bug-outils { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0; }
+  .bug-vide { color: var(--txt-tres-faible); font-size: 13.5px; padding: 18px 0; }
+
+  /* ---- Liste des rapports ---- */
+  details.bug-rapport {
+    border: 1px solid var(--ligne); border-radius: 14px;
+    background: rgba(255, 255, 255, 0.02); margin-bottom: 10px; overflow: hidden;
+  }
+  details.bug-rapport summary {
+    display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap;
+    padding: 12px 16px; cursor: pointer; list-style: none; font-size: 13.5px;
+  }
+  details.bug-rapport summary::-webkit-details-marker { display: none; }
+  details.bug-rapport summary:hover { background: rgba(0, 214, 242, 0.04); }
+  .bug-res-date { font-family: var(--mono); font-size: 11.5px; color: var(--txt-tres-faible); }
+  .bug-res-page {
+    font-family: var(--mono); font-size: 11.5px; color: var(--cyan);
+    background: rgba(0, 214, 242, 0.08); border: 1px solid rgba(0, 214, 242, 0.30);
+    border-radius: 999px; padding: 2px 10px; white-space: nowrap;
+  }
+  .bug-res-desc { color: var(--txt); flex: 1 1 260px; }
+  .bug-res-elem { font-size: 11.5px; color: #7fd8e8; }
+  .bug-corps { padding: 4px 16px 16px; border-top: 1px solid rgba(255, 255, 255, 0.07); }
+  .bug-bloc { margin: 12px 0 0; }
+  .bug-bloc h4 {
+    margin: 0 0 6px; font-size: 11px; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--txt-tres-faible); font-family: var(--mono); font-weight: 500;
+  }
+  .bug-bloc pre {
+    margin: 0; padding: 10px 12px; border-radius: 10px;
+    background: rgba(0, 0, 0, 0.35); border: 1px solid rgba(255, 255, 255, 0.07);
+    color: #c9d4da; font-size: 12px; line-height: 1.55; white-space: pre-wrap;
+    word-break: break-word; font-family: var(--mono);
+  }
+  .bug-version-ancienne { display: inline-block; margin-left: 8px; font-size: 11px; color: var(--orange); }
+  .bug-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 14px; }
+  .bug-btn-suppr {
+    padding: 8px 14px; border-radius: 10px; cursor: pointer;
+    border: 1px solid rgba(232, 160, 106, 0.4); background: transparent;
+    color: var(--orange); font-size: 12.5px; font-family: inherit;
+  }
+  .bug-btn-suppr.confirme { background: rgba(232, 160, 106, 0.14); font-weight: 600; }
+  .bug-btn-edit {
+    padding: 8px 14px; border-radius: 10px; cursor: pointer;
+    border: 1px solid rgba(0, 214, 242, 0.4); background: transparent;
+    color: var(--cyan); font-size: 12.5px; font-family: inherit;
+  }
+  .bug-btn-edit:hover { background: rgba(0, 214, 242, 0.10); }
+
+  /* ---- Modale « Compléter le rapport » ---- */
+  #bug-compl-voile {
+    position: fixed; inset: 0; z-index: 950; padding: 18px;
+    background: rgba(2, 10, 16, 0.66);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #bug-compl-voile[hidden] { display: none; }
+  #bug-compl-boite {
+    width: 100%; max-width: 520px; border-radius: 16px; padding: 20px 22px;
+    background: #0d1a24; border: 1px solid rgba(0, 214, 242, 0.25);
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.5);
+  }
+  #bug-compl-boite h3 { margin: 0; font-size: 16px; color: var(--txt); }
+  #bug-compl-sous {
+    margin: 4px 0 12px; font-size: 11.5px; color: var(--txt-tres-faible);
+    font-family: var(--mono);
+  }
+  #bug-compl-texte {
+    width: 100%; min-height: 96px; resize: vertical; box-sizing: border-box;
+    border-radius: 10px; border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(0, 0, 0, 0.35); color: var(--txt); padding: 10px 12px;
+    font: inherit; font-size: 13.5px;
+  }
+  #bug-compl-boutons { display: flex; justify-content: flex-end; gap: 10px; margin-top: 12px; }
+  #bug-compl-boutons button { border-radius: 10px; padding: 9px 16px; cursor: pointer; font: inherit; font-size: 13px; }
+  #bug-compl-annuler { border: 1px solid rgba(255, 255, 255, 0.18); background: transparent; color: #c9d4da; }
+  #bug-compl-envoyer {
+    border: none; background: linear-gradient(150deg, var(--cyan-sombre), var(--cyan-clair));
+    color: #04121a; font-weight: 600;
+  }
+
+  /* ---- Toast ---- */
+  .toast {
+    position: fixed; left: 50%; bottom: 22px; z-index: 2000;
+    transform: translateX(-50%) translateY(16px); opacity: 0; pointer-events: none;
+    max-width: calc(100vw - 36px); padding: 12px 18px; border-radius: 12px;
+    background: rgba(10, 22, 30, 0.96); border: 1px solid rgba(0, 214, 242, 0.35);
+    color: var(--txt); font-size: 13.5px; transition: opacity .2s, transform .2s;
+    box-shadow: 0 12px 34px rgba(0, 0, 0, 0.45);
+  }
+  .toast.visible { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .toast.echec { border-color: rgba(232, 160, 106, 0.5); color: #f3cbac; }
+
+  /* ---- Connexion ---- */
+  .rb-login { max-width: 380px; margin: 60px auto; text-align: center; }
+  .rb-login h1 { font-family: var(--police); font-size: 20px; color: #fff; margin: 0 0 6px; }
+  .rb-login p { color: var(--txt-faible); font-size: 13px; margin: 0 0 18px; }
+  .rb-login .champ { margin-bottom: 12px; }
+  .rb-login .erreur { color: var(--orange); font-size: 13px; margin: 0 0 12px; }
+
+  @media (max-width: 560px) {
+    .app { padding: 14px 14px 60px; }
+    .app-titre strong { font-size: 17px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="app">
+
+  <header class="app-barre">
+    <a class="btn-retour" href="/" title="Retour au cockpit" aria-label="Retour au cockpit">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="19" y1="12" x2="5" y2="12"></line><polyline points="12 19 5 12 12 5"></polyline></svg>
+    </a>
+    <div class="app-titre">
+      <span class="mono">// administration · retours</span>
+      <strong>Rapports de bug</strong>
+    </div>
+    <div class="app-actions">
+    </div>
+  </header>
+
+  <main>
+    <!-- ============ Nouveau rapport (venu du bouton 🐛) ============ -->
+    <section class="rb-section" id="section-nouveau">
+      <h2>Nouveau rapport</h2>
+      <div id="bug-accueil" class="bug-vide" hidden>
+        Aucun rapport en cours. Pour signaler un bug, utilisez le bouton
+        <b>🐛</b> en bas à droite de n'importe quelle page —
+        il emportera ici la page, l'élément en cause et le contexte technique.
+      </div>
+      <form id="bug-formulaire" hidden>
+        <div id="bug-contexte"></div>
+        <label class="label-champ" for="bug-description">Description du bug</label>
+        <textarea id="bug-description" class="champ" maxlength="4000"
+                  placeholder="Décrivez le problème : ce que vous avez fait, ce qui s'est affiché, ce qui était attendu…"></textarea>
+        <div class="bug-outils">
+          <button type="submit" class="btn-principal">Envoyer le rapport</button>
+          <button type="button" id="bug-abandonner" class="btn-ghost-sm">Abandonner</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- ============ Rapports enregistrés ============ -->
+    <section class="rb-section">
+      <h2>Rapports enregistrés <span id="bug-nb" class="mono"></span></h2>
+      <div class="bug-outils">
+        <button type="button" id="bug-export-json" class="btn-ghost-sm">⬇︎ Exporter .json</button>
+        <button type="button" id="bug-export-copier" class="btn-ghost-sm">📋 Copier le JSON</button>
+        <button type="button" id="bug-export-copier-txt" class="btn-ghost-sm">📋 Copier le TXT condensé</button>
+        <button type="button" id="bug-export-txt" class="btn-ghost-sm">⬇︎ Exporter .txt</button>
+        <button type="button" id="bug-vider" class="btn-ghost-sm">Tout supprimer</button>
+      </div>
+      <div id="bug-liste" class="bug-vide">Chargement…</div>
+    </section>
+  </main>
+</div>
+
+<div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+<!-- ============ Modale « Compléter un rapport » ============ -->
+<div id="bug-compl-voile" hidden>
+  <div id="bug-compl-boite" role="dialog" aria-modal="true" aria-label="Compléter le rapport">
+    <h3>✏️ Compléter le rapport</h3>
+    <p id="bug-compl-sous"></p>
+    <textarea id="bug-compl-texte" maxlength="2000"
+              placeholder="Information oubliée au signalement : précision, contexte, ce que vous attendiez…"></textarea>
+    <div id="bug-compl-boutons">
+      <button type="button" id="bug-compl-annuler">Annuler</button>
+      <button type="button" id="bug-compl-envoyer">Ajouter au rapport</button>
+    </div>
+  </div>
+</div>
+
+<script src="js/bug-report.js?v=4"></script>
+<script>
+/* ============================================================
+   bugs.html — logique de la page (aucune dépendance externe)
+   Les appels réseau visent l'API FastAPI /api/bugs (app/routers/api_bugs.py):
+   portage du backend PHP d'origine, contrat inchangé (Rapport_Bug.md §6.7).
+   ============================================================ */
+(function () {
+  "use strict";
+
+  /* Clés partagées avec js/bug-report.js (CONFIG.cleContexte).
+     Plusieurs applications sur le même domaine → une clé chacune. */
+  var CLE_CONTEXTE = "rb_contexte_v1";
+  var CLE_ATTENTE  = "rb_attente_v1";
+  var ESSAIS_MAX   = 12;
+  var API = "/api/bugs";
+
+  function $(id) { return document.getElementById(id); }
+  function esc(s) {
+    return String(s === undefined || s === null ? "" : s)
+      .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  }
+  function toast(texte, ok) {
+    var t = $("toast");
+    if (!t) return;
+    t.textContent = texte;
+    t.className = "visible" + (ok === false ? " echec" : "");
+    clearTimeout(toast._m);
+    toast._m = setTimeout(function () { t.className = ""; }, 4200);
+  }
+  function dateCH(ts) {
+    var d = new Date(ts * 1000);
+    function p(n) { return (n < 10 ? "0" : "") + n; }
+    return p(d.getDate()) + "." + p(d.getMonth() + 1) + "." + d.getFullYear() +
+           " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+  function tronquer(s, n) {
+    s = String(s || "");
+    return s.length > n ? s.slice(0, n - 1) + "…" : s;
+  }
+
+  /* ---------- Contexte du rapport (posé par le bouton 🐛) ---------- */
+  var contexte = null;
+  try {
+    var brut = localStorage.getItem(CLE_CONTEXTE);
+    if (brut) {
+      var c = JSON.parse(brut);
+      if (c && typeof c === "object" && (c.page || c.element)) contexte = c;
+    }
+  } catch (e) { contexte = null; }
+
+  function rendreContexte() {
+    if (!contexte) {
+      $("bug-accueil").hidden = false;
+      return;
+    }
+    var els = [];
+    if (Array.isArray(contexte.elements)) els = contexte.elements.filter(Boolean);
+    else if (contexte.element) els = [contexte.element];
+    var lignes = [
+      ["Page", contexte.page || "—"],
+      ["Date", contexte.date ? contexte.date.replace("T", " ").slice(0, 19) : "—"],
+      ["Version de l'app", contexte.version || "inconnue"],
+      ["Réseau", contexte.reseau === false ? "hors connexion" : "en ligne"],
+      ["Synchro", (contexte.attente === null || contexte.attente === undefined)
+                    ? "—" : contexte.attente + " document(s) en attente"],
+      ["Document en cours", (contexte.doc && contexte.doc.numero)
+                    ? (contexte.doc.type || "doc") + " " + contexte.doc.numero : "—"]
+    ];
+    var html = lignes.map(function (l) {
+      return "<div><span class=\"bug-cle\">" + esc(l[0]) + " :</span> " +
+             "<span class=\"bug-val\">" + esc(l[1]) + "</span></div>";
+    }).join("");
+    if (els.length) {
+      var ficheUne = function (el, i) {
+        var parties = [];
+        if (el.tag) parties.push(esc(el.tag));
+        if (el.id) parties.push("#" + esc(el.id));
+        if (el.classes && el.classes.length) parties.push("." + el.classes.map(esc).join("."));
+        var desc = [];
+        if (el.label)   desc.push("libellé : « " + esc(el.label) + " »");
+        if (el.texte)   desc.push("« " + esc(tronquer(el.texte, 70)) + " »");
+        var h = (els.length > 1 ? "<b>" + (i + 1) + ".</b> " : "") + parties.join(" ") +
+                (desc.length ? " — " + desc.join(" · ") : "");
+        if (el.chemin) h += "<br><span style=\"color:#6d7d8d\">" + esc(el.chemin) + "</span>";
+        return h;
+      };
+      html += "<div id=\"bug-element-carte\">🎯 " +
+              (els.length > 1 ? "<b>" + els.length + " éléments signalés :</b><br>" : "Élément signalé : ") +
+              els.map(ficheUne).join("<br>") + "</div>";
+    }
+    if (contexte.erreurs && contexte.erreurs.length) {
+      html += "<div><span class=\"bug-cle\">Erreurs JavaScript capturées :</span> " +
+              "<span class=\"bug-val\">" + contexte.erreurs.length + " (jointes au rapport)</span></div>";
+    }
+    $("bug-contexte").innerHTML = html;
+    $("bug-formulaire").hidden = false;
+  }
+  rendreContexte();
+
+  /* ---------- Envoi + file hors-ligne ---------- */
+  function attenteLire() {
+    try {
+      var t = JSON.parse(localStorage.getItem(CLE_ATTENTE) || "[]");
+      return Array.isArray(t) ? t : [];
+    } catch (e) { return []; }
+  }
+  function attenteEcrire(t) {
+    try { localStorage.setItem(CLE_ATTENTE, JSON.stringify(t)); } catch (e) { /* plein */ }
+  }
+
+  /* Un seul point d'entrée POST : le contrat de réponse reste celui du
+     PHP d'origine — {ok:true} ou {ok:false, error} — d'où le test sur ok
+     et la reprise {auth:true} qui laisse le rapport en file d'attente. */
+  function poster(route, champs) {
+    return fetch(API + "/" + route, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(champs),
+      credentials: "same-origin"
+    }).then(function (r) { return r.json(); })
+      .then(function (rep) {
+        if (rep && rep.ok) return rep;
+        if (rep && rep.auth) throw { auth: true };
+        throw new Error(rep && rep.error ? rep.error : "Réponse inattendue.");
+      });
+  }
+
+  function envoyerRapport(description, contexteJson, apresSucces) {
+    return poster("signaler", { description: description, contexte: contexteJson })
+      .then(function (rep) { apresSucces(rep); });
+  }
+
+  $("bug-formulaire").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var description = $("bug-description").value.trim();
+    if (!description) {
+      toast("Décrivez d'abord le bug — quelques mots suffisent.", false);
+      $("bug-description").focus();
+      return;
+    }
+    var bouton = e.target.querySelector("button[type=submit]");
+    if (bouton) bouton.disabled = true;
+    envoyerRapport(description, JSON.stringify(contexte || {}), function () {
+      try { localStorage.removeItem(CLE_CONTEXTE); } catch (err) {}
+      contexte = null;
+      $("bug-formulaire").hidden = true;
+      $("bug-accueil").hidden = false;
+      toast("✓ Rapport de bug enregistré");
+      chargerListe();
+    }).catch(function (err) {
+      if (err && err.auth) {
+        toast("🔑 Session expirée — reconnectez-vous, le rapport est gardé ici.", false);
+      } else {
+        /* Hors connexion : le rapport part dans la file, tout seul
+           dès qu'un réseau revient (le brouillon est effacé). */
+        var t = attenteLire();
+        t.push({ description: description, contexte: JSON.stringify(contexte || {}),
+                 ts: Date.now(), essais: 0 });
+        attenteEcrire(t);
+        try { localStorage.removeItem(CLE_CONTEXTE); } catch (err2) {}
+        contexte = null;
+        $("bug-formulaire").hidden = true;
+        $("bug-accueil").hidden = false;
+        toast("⚠ Hors connexion — le rapport est gardé et partira dès le retour du réseau.");
+        rejouerFile();
+      }
+      chargerListe();
+    }).then(function () {
+      if (bouton) bouton.disabled = false;
+    });
+  });
+
+  $("bug-abandonner").addEventListener("click", function () {
+    var b = $("bug-abandonner");
+    if (!b.classList.contains("confirme")) {
+      b.classList.add("confirme");
+      b.textContent = "Confirmer l'abandon ?";
+      setTimeout(function () {
+        b.classList.remove("confirme");
+        b.textContent = "Abandonner";
+      }, 4000);
+      return;
+    }
+    b.classList.remove("confirme");
+    b.textContent = "Abandonner";
+    try { localStorage.removeItem(CLE_CONTEXTE); } catch (e) {}
+    contexte = null;
+    $("bug-formulaire").hidden = true;
+    $("bug-accueil").hidden = false;
+  });
+
+  function rejouerFile() {
+    var t = attenteLire();
+    if (!t.length || !navigator.onLine) return;
+    var premier = t[0];
+    envoyerRapport(premier.description, premier.contexte, function () {
+      t.shift();
+      attenteEcrire(t);
+      toast("✓ Rapport de bug parti (retour du réseau)");
+      chargerListe();
+      rejouerFile();                    /* suivant */
+    }).catch(function (err) {
+      if (err && err.auth) {
+        premier.essais = (premier.essais || 0) + 1;
+        if (premier.essais >= ESSAIS_MAX) { t.shift(); attenteEcrire(t); }
+        else { t[0] = premier; attenteEcrire(t); }
+      }
+      /* erreur réseau : tout reste en file */
+    });
+  }
+  setTimeout(rejouerFile, 4000);
+  window.addEventListener("online", function () { setTimeout(rejouerFile, 3000); });
+  setInterval(rejouerFile, 20000);
+
+  /* ---------- Liste des rapports ---------- */
+  var rapports = [];
+
+  function corpsRapport(r) {
+    var c = (r && r.contexte && typeof r.contexte === "object") ? r.contexte : {};
+    var els = (Array.isArray(c.elements) && c.elements.length)
+      ? c.elements.filter(Boolean) : (c.element ? [c.element] : []);
+    var versionServeur = document.body.getAttribute("data-version") || "";
+    var versionRapport = c.version || "";
+    var html = "";
+
+    html += "<div class=\"bug-bloc\"><h4>Description</h4><pre>" +
+            esc(r.description || "(vide)") + "</pre></div>";
+
+    if (els.length) {
+      var blocs = els.map(function (el, i) {
+        var l = [];
+        if (els.length > 1) l.push("— Élément " + (i + 1) + " —");
+        if (el.texte) l.push("Texte visible : " + el.texte);
+        if (el.label) l.push("Libellé du champ : " + el.label);
+        if (el.tag) {
+          l.push("Type : " + el.tag +
+            (el.type && el.type !== el.tag ? " (" + el.type + ")" : "") +
+            (el.id ? " — identifiant #" + el.id : ""));
+        }
+        if (el.classes && el.classes.length) l.push("Classes : ." + el.classes.join(" ."));
+        if (el.chemin) l.push("Emplacement : " + el.chemin);
+        return l.join("\n");
+      });
+      html += "<div class=\"bug-bloc\"><h4>Élément" + (els.length > 1 ? "s" : "") + " signalé" +
+              (els.length > 1 ? "s (" + els.length + ")" : "") + "</h4><pre>" +
+              esc(blocs.join("\n\n")) + "</pre></div>";
+    }
+
+    var versionNote = (versionRapport && versionServeur && versionRapport !== versionServeur)
+      ? "<span class=\"bug-version-ancienne\">⚠ signalé depuis " + esc(versionRapport) +
+        " (actuel : " + esc(versionServeur) + ")</span>" : "";
+    var lignesCtx = [
+      "Page : " + (c.page || r.page || "—"),
+      "Version de l'app : " + (versionRapport || "inconnue") +
+        (versionNote ? "" : (versionServeur ? " (= version actuelle)" : "")),
+      "Réseau : " + (c.reseau === false ? "hors connexion" : "en ligne"),
+      "Synchro : " + ((c.attente === null || c.attente === undefined)
+                        ? "—" : c.attente + " document(s) en attente"),
+      "Document en cours : " + ((c.doc && c.doc.numero)
+                        ? (c.doc.type || "doc") + " " + c.doc.numero : "—"),
+      "Date : " + (c.date || "—"),
+      "Appareil : " + tronquer(c.agent || "—", 110)
+    ];
+    html += "<div class=\"bug-bloc\"><h4>Contexte</h4><pre>" +
+            esc(lignesCtx.join("\n")) + "</pre>" + versionNote + "</div>";
+
+    if (c.erreurs && c.erreurs.length) {
+      var lignesErr = c.erreurs.map(function (e) {
+        return "• " + (e.msg || "?") +
+               (e.src ? "  [" + e.src + (e.ligne ? ":" + e.ligne : "") + "]" : "");
+      });
+      html += "<div class=\"bug-bloc\"><h4>Erreurs JavaScript (" + c.erreurs.length +
+              ")</h4><pre>" + esc(lignesErr.join("\n")) + "</pre></div>";
+    }
+
+    if (r.complements && r.complements.length) {
+      var lignesCmp = r.complements.map(function (cm) {
+        return "• " + (cm.ts ? dateCH(cm.ts) + " — " : "") + (cm.texte || "");
+      });
+      html += "<div class=\"bug-bloc\"><h4>Compléments (" + r.complements.length +
+              ")</h4><pre>" + esc(lignesCmp.join("\n")) + "</pre></div>";
+    }
+
+    html += "<div class=\"bug-actions\">" +
+            "<button type=\"button\" class=\"bug-btn-edit\" data-id=\"" + esc(r.id) +
+            "\">✏️ Compléter</button>" +
+            "<button type=\"button\" class=\"bug-btn-suppr\" data-id=\"" + esc(r.id) +
+            "\">Supprimer ce rapport</button>" +
+            "</div>";
+    return html;
+  }
+
+  function rendreListe() {
+    var conteneur = $("bug-liste");
+    $("bug-nb").textContent = rapports.length ? "· " + rapports.length : "";
+    if (!rapports.length) {
+      conteneur.className = "bug-vide";
+      conteneur.textContent = "Aucun rapport enregistré — la liste se remplira au premier bug signalé.";
+      return;
+    }
+    conteneur.className = "";
+    conteneur.innerHTML = rapports.map(function (r) {
+      var els = (r.contexte && Array.isArray(r.contexte.elements) && r.contexte.elements.length)
+        ? r.contexte.elements : ((r.contexte && r.contexte.element) ? [r.contexte.element] : []);
+      var el = els[0] || null;
+      return "<details class=\"bug-rapport\">" +
+        "<summary>" +
+          "<span class=\"bug-res-date\">" + esc(dateCH(r.ts || 0)) + "</span>" +
+          "<span class=\"bug-res-page\">" + esc(r.page || "?") + "</span>" +
+          "<span class=\"bug-res-desc\">" + esc(tronquer(r.description || "", 90)) + "</span>" +
+          (el ? "<span class=\"bug-res-elem\">🎯 " + esc(el.tag || "") +
+                (el.id ? "#" + esc(el.id) : "") +
+                (els.length > 1 ? " +" + (els.length - 1) : "") + "</span>" : "") +
+        "</summary>" +
+        "<div class=\"bug-corps\">" + corpsRapport(r) + "</div>" +
+      "</details>";
+    }).join("");
+
+    Array.prototype.forEach.call(
+      conteneur.querySelectorAll(".bug-btn-suppr"), function (b) {
+        b.addEventListener("click", function () {
+          if (!b.classList.contains("confirme")) {
+            b.classList.add("confirme");
+            b.textContent = "Confirmer la suppression ?";
+            setTimeout(function () {
+              b.classList.remove("confirme");
+              b.textContent = "Supprimer ce rapport";
+            }, 4000);
+            return;
+          }
+          postAction({ action: "bug_supprimer", id: b.getAttribute("data-id") })
+            .then(function () { toast("✓ Rapport supprimé"); chargerListe(); })
+            .catch(function (e) { toast(e && e.message ? e.message : "Échec de la suppression.", false); });
+        });
+      });
+
+    Array.prototype.forEach.call(
+      conteneur.querySelectorAll(".bug-btn-edit"), function (b) {
+        b.addEventListener("click", function () {
+          ouvrirModaleComplement(b.getAttribute("data-id"));
+        });
+      });
+  }
+
+  function chargerListe() {
+    return fetch(API + "/liste?t=" + Date.now(), { cache: "no-store" })
+      .then(function (r) { return r.json(); })
+      .then(function (rep) {
+        if (rep && rep.auth) {
+          $("bug-liste").className = "bug-vide";
+          $("bug-liste").textContent = "Session expirée — reconnectez-vous pour voir les rapports.";
+          return;
+        }
+        if (rep && rep.ok) { rapports = rep.rapports || []; rendreListe(); }
+      })
+      .catch(function () {
+        $("bug-liste").className = "bug-vide";
+        $("bug-liste").textContent = "Serveur injoignable — la liste s'affichera dès le retour du réseau.";
+      });
+  }
+
+  /* Actions du HTML d'origine → routes de l'API (§6.7). */
+  var ROUTES = { bug_signaler: "signaler", bug_completer: "completer",
+                 bug_supprimer: "supprimer", bug_vider: "vider" };
+
+  function postAction(champs) {
+    var corps = {};
+    Object.keys(champs).forEach(function (k) {
+      if (k !== "action") corps[k] = champs[k];
+    });
+    return poster(ROUTES[champs.action] || champs.action, corps);
+  }
+
+  /* ---------- Complément d'un rapport (information oubliée) ---------- */
+  var idComplementEnCours = "";
+
+  function ouvrirModaleComplement(id) {
+    var r = null;
+    rapports.forEach(function (x) { if (x.id === id) r = x; });
+    if (!r) return;
+    idComplementEnCours = id;
+    $("bug-compl-sous").textContent = (r.id || "") + " · " + dateCH(r.ts || 0);
+    $("bug-compl-texte").value = "";
+    $("bug-compl-voile").hidden = false;
+    $("bug-compl-texte").focus();
+  }
+  function fermerModaleComplement() {
+    $("bug-compl-voile").hidden = true;
+    idComplementEnCours = "";
+  }
+  $("bug-compl-annuler").addEventListener("click", fermerModaleComplement);
+  $("bug-compl-voile").addEventListener("click", function (e) {
+    if (e.target === this) fermerModaleComplement();
+  });
+  document.addEventListener("keydown", function (e) {
+    if (e.key === "Escape" && !$("bug-compl-voile").hidden) fermerModaleComplement();
+  });
+  $("bug-compl-envoyer").addEventListener("click", function () {
+    var btn = this;
+    var texte = $("bug-compl-texte").value.trim();
+    if (!texte) { toast("Écrivez l'information à ajouter.", false); $("bug-compl-texte").focus(); return; }
+    if (!idComplementEnCours) return;
+    btn.disabled = true;
+    postAction({ action: "bug_completer", id: idComplementEnCours, texte: texte })
+      .then(function () {
+        fermerModaleComplement();
+        toast("✓ Complément ajouté au rapport");
+        chargerListe();
+      })
+      .catch(function (e) { toast(e && e.message ? e.message : "Échec de l'ajout.", false); })
+      .then(function () { btn.disabled = false; });
+  });
+
+  /* ---------- Export (.json / .txt) ---------- */
+  function telecharger(nom, texte, mime) {
+    var blob = new Blob([texte], { type: mime });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = nom;
+    document.body.appendChild(a);
+    a.click();
+    setTimeout(function () {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 500);
+  }
+  function horodatageFichier() {
+    var d = new Date();
+    function p(n) { return (n < 10 ? "0" : "") + n; }
+    return d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + "_" +
+           p(d.getHours()) + p(d.getMinutes());
+  }
+
+  $("bug-export-json").addEventListener("click", function () {
+    if (!rapports.length) { toast("Aucun rapport à exporter.", false); return; }
+    telecharger("rapports_bugs_" + horodatageFichier() + ".json",
+                JSON.stringify(rapports, null, 2), "application/json");
+  });
+
+  /* Copie partagée au presse-papiers (API clipboard + repli
+     execCommand pour les contextes qui la refusent). */
+  function copierPressePapiers(texte, okMsg) {
+    var repli = function () {
+      try {
+        var ta = document.createElement("textarea");
+        ta.value = texte;
+        ta.style.position = "fixed";
+        ta.style.left = "-9999px";
+        document.body.appendChild(ta);
+        ta.select();
+        var bien = document.execCommand("copy");
+        ta.remove();
+        if (bien) toast(okMsg, true);
+        else toast("Copie impossible — utilisez les exports ⬇︎", false);
+      } catch (e) { toast("Copie impossible — utilisez les exports ⬇︎", false); }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(texte).then(function () {
+        toast(okMsg, true);
+      }, repli);
+    } else repli();
+  }
+
+  /* Copier le JSON intégral : fidèle à 100 %, lourd en tokens. */
+  $("bug-export-copier").addEventListener("click", function () {
+    if (!rapports.length) { toast("Aucun rapport à copier.", false); return; }
+    copierPressePapiers(JSON.stringify(rapports, null, 2),
+      "✓ JSON copié — collez-le directement dans le message");
+  });
+
+  /* Format TXT condensé : tout ce qui sert au diagnostic, rien de
+     plus — pensé pour être collé dans un message à l'assistant. */
+  function rappelDate(ts) {
+    var d = new Date(ts * 1000);
+    var p = function (n) { return (n < 10 ? "0" : "") + n; };
+    return p(d.getDate()) + "." + p(d.getMonth() + 1) + " " + p(d.getHours()) + ":" + p(d.getMinutes());
+  }
+  function rappelUaCourt(ua) {
+    var nav = "?", m;
+    if ((m = /Edg\/(\d+)/.exec(ua))) nav = "Edge " + m[1];
+    else if ((m = /Chrome\/(\d+)/.exec(ua))) nav = "Chrome " + m[1];
+    else if ((m = /Version\/([\d.]+)/.exec(ua)) && /Safari/.test(ua)) nav = "Safari " + m[1];
+    else if ((m = /Firefox\/(\d+)/.exec(ua))) nav = "Firefox " + m[1];
+    var os = "?", o;
+    if ((o = /Mac OS X ([0-9_]+)/.exec(ua))) os = "Mac " + o[1].replace(/_/g, ".");
+    else if (/iPad/.test(ua)) os = "iPad";
+    else if (/iPhone/.test(ua)) os = "iPhone";
+    else if (/Windows NT 10/.test(ua)) os = "Windows";
+    return nav + " / " + os;
+  }
+  function rappelElement(el) {
+    if (!el) return "—";
+    var s = el.tag || "?";
+    if (el.id) s += "#" + el.id;
+    var cls = (el.classes || []).filter(Boolean).join(".");
+    if (cls) s += " [" + cls + "]";
+    if (el.texte) s += " « " + String(el.texte).slice(0, 80) + " »";
+    return s;
+  }
+  function construireRapportsTxt() {
+    var lignes = ["RAPPORTS BUG (" + rapports.length + ") — app " +
+      (document.body.getAttribute("data-version") || "?")];
+    rapports.forEach(function (r, i) {
+      var c = r.contexte || {};
+      lignes.push("— #" + (i + 1) + " " + (r.id || "") + " | " +
+        (r.page || c.page || "?") + " | " + rappelDate(r.ts || 0));
+      lignes.push("  dis: " + (r.description || ""));
+      var els = Array.isArray(c.elements) ? c.elements.filter(Boolean)
+              : (c.element ? [c.element] : []);
+      if (els.length === 1) {
+        lignes.push("  el: " + rappelElement(els[0]));
+        if (els[0] && els[0].chemin) lignes.push("  où: " + els[0].chemin);
+      } else {
+        els.forEach(function (el, k) {
+          lignes.push("  el" + (k + 1) + ": " + rappelElement(el));
+          if (el && el.chemin) lignes.push("  où" + (k + 1) + ": " + el.chemin);
+        });
+      }
+      var infos = ["app " + (c.version || "?"),
+                   c.reseau === false ? "HORS-LIGNE" : "en ligne"];
+      if (c.attente) infos.push("attente " + c.attente);
+      if (c.doc && c.doc.numero) infos.push("doc " + c.doc.numero);
+      lignes.push("  ctx: " + infos.join(" | "));
+      lignes.push("  err: " + ((c.erreurs && c.erreurs.length)
+        ? c.erreurs.map(function (e) { return (e && (e.msg || e.message)) || String(e); }).join(" ;; ")
+        : "aucune"));
+      if (r.complements && r.complements.length) {
+        lignes.push("  cmp: " + r.complements.map(function (cm) {
+          return (cm.texte || "") + " (" + (cm.ts ? rappelDate(cm.ts) : "?") + ")";
+        }).join(" ;; "));
+      }
+      lignes.push("  agent: " + rappelUaCourt(c.agent || ""));
+    });
+    return lignes.join("\n");
+  }
+  $("bug-export-copier-txt").addEventListener("click", function () {
+    if (!rapports.length) { toast("Aucun rapport à copier.", false); return; }
+    copierPressePapiers(construireRapportsTxt(),
+      "✓ TXT condensé copié — collez-le directement dans le message");
+  });
+
+  $("bug-export-txt").addEventListener("click", function () {
+    if (!rapports.length) { toast("Aucun rapport à exporter.", false); return; }
+    var lignes = [];
+    lignes.push("============================================================");
+    lignes.push("RAPPORTS DE BUG");
+    lignes.push("Exporté le " + dateCH(Date.now() / 1000) + " — " + rapports.length + " rapport(s)");
+    lignes.push("============================================================");
+    rapports.forEach(function (r, i) {
+      var c = (r.contexte && typeof r.contexte === "object") ? r.contexte : {};
+      var els = (Array.isArray(c.elements) && c.elements.length)
+        ? c.elements.filter(Boolean) : (c.element ? [c.element] : []);
+      lignes.push("");
+      lignes.push("[#" + (i + 1) + "] " + dateCH(r.ts || 0) + " — " + (r.page || "?") +
+                  (c.version ? "  (version " + c.version + ")" : ""));
+      lignes.push("------------------------------------------------------------");
+      lignes.push("DESCRIPTION :");
+      lignes.push("  " + String(r.description || "").replace(/\n/g, "\n  "));
+      if (els.length) {
+        lignes.push("ÉLÉMENT" + (els.length > 1 ? "S" : "") + " SIGNALÉ" + (els.length > 1 ? "S" : "") + " :");
+        els.forEach(function (el, k) {
+          if (els.length > 1) lignes.push("  — Élément " + (k + 1) + " —");
+          if (el.texte) lignes.push("  Texte visible : " + el.texte);
+          if (el.label) lignes.push("  Libellé : " + el.label);
+          if (el.tag) lignes.push("  Type : " + el.tag + (el.id ? " #" + el.id : ""));
+          if (el.chemin) lignes.push("  Emplacement : " + el.chemin);
+        });
+      }
+      lignes.push("CONTEXTE :");
+      lignes.push("  Réseau : " + (c.reseau === false ? "hors connexion" : "en ligne") +
+                  " · Synchro : " + ((c.attente === undefined || c.attente === null)
+                                      ? "?" : c.attente + " en attente") +
+                  " · Document : " + ((c.doc && c.doc.numero) ? c.doc.numero : "—"));
+      if (c.erreurs && c.erreurs.length) {
+        lignes.push("ERREURS JAVASCRIPT :");
+        c.erreurs.forEach(function (e) {
+          lignes.push("  • " + (e.msg || "?") +
+                     (e.src ? "  [" + e.src + (e.ligne ? ":" + e.ligne : "") + "]" : ""));
+        });
+      }
+      if (r.complements && r.complements.length) {
+        lignes.push("COMPLÉMENTS (" + r.complements.length + ") :");
+        r.complements.forEach(function (cm) {
+          lignes.push("  • " + (cm.ts ? dateCH(cm.ts) + " — " : "") + (cm.texte || ""));
+        });
+      }
+    });
+    lignes.push("");
+    lignes.push("============================================================");
+    lignes.push("fin de l'export");
+    telecharger("rapports_bugs_" + horodatageFichier() + ".txt",
+                lignes.join("\n"), "text/plain;charset=utf-8");
+  });
+
+  /* ---------- Tout supprimer (double clic de confirmation) ---------- */
+  $("bug-vider").addEventListener("click", function () {
+    if (!rapports.length) { toast("La liste est déjà vide.", false); return; }
+    var b = $("bug-vider");
+    if (!b.classList.contains("confirme")) {
+      b.classList.add("confirme");
+      b.textContent = "Confirmer : tout supprimer ?";
+      setTimeout(function () {
+        b.classList.remove("confirme");
+        b.textContent = "Tout supprimer";
+      }, 4000);
+      return;
+    }
+    b.classList.remove("confirme");
+    b.textContent = "Tout supprimer";
+    postAction({ action: "bug_vider" })
+      .then(function () { toast("✓ Tous les rapports sont supprimés"); chargerListe(); })
+      .catch(function (e) { toast(e && e.message ? e.message : "Échec de la suppression.", false); });
+  });
+
+  chargerListe();
+})();
+</script>
+
+
+</body>
+</html>

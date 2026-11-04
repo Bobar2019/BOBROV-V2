@@ -20,9 +20,15 @@ videos/*.jpeg
 videos/index.json
 videos/.bobrov_index.json
 
+# Rapports de bug (texte libre saisi dans l'interface ; API /api/bugs)
+Rapport_bug/data/*.json
+
 # Journaux locaux : le répertoire est conservé pour les déploiements.
 logs/*
 !logs/.gitkeep
+
+# Certificats TLS auto-signés (deploy/gen-cert.sh) : propres à chaque machine
+deploy/tls/
 
 # Divers
 *.bak

@@ -135,6 +135,53 @@ def test_cockpit_overlay_defaults_cover_every_instrument(tmp_path):
     assert all(isinstance(value, bool) for value in overlay.values())
 
 
+def test_hud_invert_defaults_off_and_persists(tmp_path):
+    path = tmp_path / "config.json"
+    mgr = ConfigManager(path)
+    cfg = mgr.load()
+    # Tant qu'on ne l'inverse pas, chaque axe d'attitude est lu dans le sens du capteur.
+    assert cfg["cockpit"]["hud"]["invert"] == {"roll": False, "pitch": False, "heading": False}
+    # Un patch partiel ne touche que l'axe cité et laisse les autres comme ils sont.
+    mgr.update({"cockpit": {"hud": {"invert": {"roll": True, "heading": True}}}})
+    reloaded = ConfigManager(path).load()
+    assert reloaded["cockpit"]["hud"]["invert"] == {"roll": True, "pitch": False, "heading": True}
+    # Le sens des axes et la mise en page des instruments sont deux réglages distincts.
+    assert reloaded["cockpit"]["hud"]["elements"]["horizon"]["x"] == 37.0
+
+
+def test_hud_invert_rejects_non_boolean(tmp_path):
+    path = tmp_path / "config.json"
+    mgr = ConfigManager(path)
+    mgr.load()
+    for bad in ({"roll": "oui"}, {"pitch": 1}, {"heading": None}, {"roll": None}):
+        with pytest.raises(ConfigError):
+            mgr.update({"cockpit": {"hud": {"invert": bad}}})
+    assert mgr.get()["cockpit"]["hud"]["invert"] == {"roll": False, "pitch": False, "heading": False}
+
+
+def test_simulator_axis_invert_defaults_off_and_is_independent(tmp_path):
+    path = tmp_path / "config.json"
+    mgr = ConfigManager(path)
+    cfg = mgr.load()
+    # La scène 3D a son propre sens d'axes (dossier « ROV réel » du simulateur).
+    assert cfg["simulator"]["real"]["invert"] == {"roll": False, "pitch": False, "heading": False}
+    mgr.update({"simulator": {"real": {"invert": {"heading": True}}}})
+    reloaded = ConfigManager(path).load()
+    assert reloaded["simulator"]["real"]["invert"] == {"roll": False, "pitch": False, "heading": True}
+    # Le réglage du simulateur ne touche pas celui du HUD du Cockpit.
+    assert reloaded["cockpit"]["hud"]["invert"] == {"roll": False, "pitch": False, "heading": False}
+
+
+def test_simulator_axis_invert_rejects_non_boolean(tmp_path):
+    path = tmp_path / "config.json"
+    mgr = ConfigManager(path)
+    mgr.load()
+    for bad in ({"roll": "oui"}, {"pitch": 0}, {"heading": None}):
+        with pytest.raises(ConfigError):
+            mgr.update({"simulator": {"real": {"invert": bad}}})
+    assert mgr.get()["simulator"]["real"]["invert"] == {"roll": False, "pitch": False, "heading": False}
+
+
 def test_hud_layout_update_persists_element(tmp_path):
     path = tmp_path / "config.json"
     mgr = ConfigManager(path)
