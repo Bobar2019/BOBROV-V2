@@ -187,12 +187,14 @@ function initThemeToggle() {
  * ========================================================================= */
 
 let currentView = 'dashboard';        // dashboard | parameters | section
+let currentSectionId = '';            // section affichée ('' hors section)
 let sectionOrigin = 'dashboard';      // d'où la section courante a été ouverte
 
 function hideAllViews() {
     byId('dashboard').style.display = 'none';
     byId('parameters').style.display = 'none';
     $$('.section-panel').forEach((section) => { section.style.display = 'none'; });
+    currentSectionId = '';
     stopAlignPreview();                 // l'aperçu du binôme ne tourne que dans sa section
     if (HUD.editing) cancelHudEdit();   // quitter le Cockpit abandonne le mode mise en page
 }
@@ -219,6 +221,7 @@ function showSection(id, origin = 'dashboard') {
     hideAllViews();
     sectionOrigin = origin;
     currentView = 'section';
+    currentSectionId = id;
     target.style.display = 'block';
     byId('btn-back').style.display = 'flex';
     window.scrollTo(0, 0);
@@ -4451,11 +4454,13 @@ function publishHeadTrackerInput(active, values, deviceId) {
     }));
 }
 
-/** Lit les axes configurés et les route comme des consignes [-1, +1]. */
-function updateHeadTrackerInput(pads = padsConnected()) {
+/** Lit les axes configurés et les route comme des consignes [-1, +1].
+ *  `live` à faux (hors vue Cockpit) publie des consignes neutres sans rien couper
+ *  à l'affichage de l'état dans les réglages. */
+function updateHeadTrackerInput(pads = padsConnected(), live = true) {
     const cfg = headTrackerConfig();
     const tracker = cfg.enabled ? headTrackerPad(pads) : null;
-    const active = !!tracker && (cfg.mode === 'always' || headTrackerEngaged(pads));
+    const active = live && !!tracker && (cfg.mode === 'always' || headTrackerEngaged(pads));
     const values = {};
     if (active) {
         cfg.routes.forEach((route) => {
@@ -5139,18 +5144,50 @@ function scanGamepads(quiet) {
 
 let padReaderTimer = 0;
 const padPrevState = new Map();
+let padReaderPrime = false;         // premier tour après un retour dans le Cockpit : ne déclenche rien
 
 function padReaderSources() {
     const actions = (CONFIG && CONFIG.input && CONFIG.input.gamepad && CONFIG.input.gamepad.actions) || [];
     return actions.filter((action) => action && PAD_TRIGGERS[action.id] && padSourcesOf(action).length);
 }
 
-/** Front montant d'un bouton ou d'un axe assigné → déclenche l'action du poste. */
+/** La vue Cockpit est-elle celle qui est affichée (et l'onglet visible) ?
+ *  Seule cette vue consomme la manette du poste : ailleurs (Paramètres, autre
+ *  section, onglet en arrière-plan) rec, photo, caméras et autopilote sont ignorés
+ *  en silence — la manette ne doit pas « cliquer » à travers la navigation. */
+function cockpitOnScreen() {
+    return currentView === 'section' && currentSectionId === 'section-cockpit'
+        && document.visibilityState !== 'hidden';
+}
+
+/** Quitter le Cockpit relâche ce que la manette maintenait (retour surface…). */
+function releasePadHeld() {
+    if (!padPrevState.size) return;
+    padPrevState.forEach((was, key) => {
+        if (!was) return;
+        const release = PAD_RELEASES[key.slice(0, key.lastIndexOf(':'))];
+        if (release) release();
+    });
+    padPrevState.clear();
+}
+
+/** Front montant d'un bouton ou d'un axe assigné → déclenche l'action du poste.
+ *  Rien n'est déclenché hors de la vue Cockpit (voir cockpitOnScreen). */
 function padReaderStep() {
     if (padCapture || headTrackerCapture || !navigator.getGamepads) return;   // assignation en cours : muet
     const pads = padsConnected();
-    updateHeadTrackerInput(pads);
+    const onCockpit = cockpitOnScreen();
+    // le head-tracker ne pousse ses consignes que depuis le Cockpit ; son état
+    // reste lisible dans les réglages (la ligne « tête » se rafraîchit quand même)
+    updateHeadTrackerInput(pads, onCockpit);
+    if (!onCockpit) {
+        releasePadHeld();                          // rien ne reste maintenu en quittant
+        padReaderPrime = true;                     // au retour, on recale sans déclencher
+        return;
+    }
     const sources = padReaderSources();
+    const prime = padReaderPrime;
+    padReaderPrime = false;
     if (!sources.length) return;
     pads.forEach((pad) => {
         sources.forEach((action) => {
@@ -5167,6 +5204,7 @@ function padReaderStep() {
             const key = action.id + ':' + pad.id;
             const was = padPrevState.get(key) || false;
             padPrevState.set(key, active);
+            if (prime) return;                         // un bouton déjà tenu au retour ne déclenche pas
             if (active && !was) {
                 PAD_TRIGGERS[action.id]();
             } else if (!active && was && PAD_RELEASES[action.id]) {
