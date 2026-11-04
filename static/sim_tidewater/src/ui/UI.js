@@ -2156,6 +2156,7 @@ export class UI {
 						${ row( k( 'Shift' ), 'Sprint, full thrust' ) }
 						${ row( k( 'Space' ), 'Jump, swim up, surface' ) }
 						${ row( k( 'C' ), 'Crouch, dive' ) }
+						${ row( 'Manette', 'Gamepad<small>Mêmes axes et boutons que le cockpit</small>' ) }
 					</section>
 					<section>
 						<h3>Interact</h3>

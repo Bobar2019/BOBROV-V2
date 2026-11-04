@@ -620,6 +620,7 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 	_readRovInput( dt ) {
 
 		const inp = this.input;
+		const pad = inp.padCommand();
 		let throttle = 0, steer = 0, vertical = 0;
 		if ( inp.down( 'KeyW' ) ) throttle = inp.down( 'ShiftLeft' ) || inp.down( 'ShiftRight' ) ? 1 : 0.7;
 		if ( inp.down( 'KeyS' ) ) throttle = - 0.7;
@@ -627,6 +628,12 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		if ( inp.down( 'KeyD' ) ) steer -= 1;
 		if ( inp.down( 'Space' ) ) vertical += 1;
 		if ( inp.down( 'KeyC' ) || inp.down( 'ControlLeft' ) || inp.down( 'ControlRight' ) ) vertical -= 1;
+		// the pad has the last word on an axis it deflects (and only on that one): a stick left
+		// resting at its centre never fights the keys, and an axis wired on the cockpit's side
+		// moves the same channel the keys move
+		if ( pad.throttle ) throttle = pad.throttle;
+		if ( pad.steer ) steer = pad.steer;
+		if ( pad.vertical ) vertical = pad.vertical;
 		this.rovCtl.setInput( throttle, steer, dt, vertical );
 
 	}
@@ -726,10 +733,13 @@ fn terrainWetness( xz: vec2f, h: f32 ) -> vec2f {
 		}
 
 		// ---- the ROV / the walker (the vehicle first, so the cameras follow this frame's pose)
+		// one read of the cockpit's gamepads per frame, before any key or pad test below
+		this.input.pollPads();
 		if ( this.input.hit( 'KeyF' ) ) this.setFreeCam( ! this.freeCam );
 		if ( this.input.hit( 'KeyT' ) ) this.toggleTime();
-		// L: the pilot's flashlight, or the ROV's projectors while he is aboard
-		if ( this.input.hit( 'KeyL' ) ) {
+		// L: the pilot's flashlight, or the ROV's projectors while he is aboard — the pad's
+		// « Éclairage on/off » (the cockpit's own function) does the same, aboard only
+		if ( this.input.hit( 'KeyL' ) || ( this.rovActive && this.input.padHit( 'light' ) ) ) {
 
 			if ( this.rovActive ) this.toggleRovLights();
 			else {

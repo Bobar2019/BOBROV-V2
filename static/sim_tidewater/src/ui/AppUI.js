@@ -196,6 +196,9 @@ export class AppUI {
 			link.addInfo( { label: 'Liaison', get: () => real.linkLabel() } );
 			link.addInfo( { label: 'Dernière trame', get: () => real.ageLabel() } );
 			link.addInfo( { label: 'Commande', get: () => real.driveLabel() } );
+			// the pilot's own wiring (input.gamepad of config.json, read over /api/config): the
+			// pad drives the frame with the very axes and buttons the cockpit assigned
+			link.addInfo( { label: 'Manette', get: () => app.input.padLabel() } );
 			// The scene's own sense. The cockpit's three switches (Config Cockpit › HUD télémétrie)
 			// correct its HUD over the video feed; a mirrored HUD and a mirrored model are two
 			// different things, so the 3D pose is set here and stored in simulator.real.invert.
